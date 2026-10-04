@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+# Auto-saved open documents and the local API key
+workspace/
+config.json
+.claude/

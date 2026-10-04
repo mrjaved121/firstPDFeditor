@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Editor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='1' width='12' height='14' rx='2' fill='%232563eb'/%3E%3Cpath d='M5 6h6M5 9h6M5 12h4' stroke='white'/%3E%3C/svg%3E">
+<script>
+  // Apply the saved theme before the page paints, to avoid a flash.
+  try {
+    const t = localStorage.getItem("pdfeditor.theme");
+    if (t) document.documentElement.dataset.theme = t;
+  } catch {}
+</script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="toolbar">
+  <div class="group">
+    <label class="btn primary" title="Open a PDF in a new tab (Ctrl+O)">Open
+      <input type="file" id="openInput" accept="application/pdf,.pdf" multiple hidden>
+    </label>
+    <label class="btn" title="Make a PDF from Word, Excel, PowerPoint, images, text… (opens in a new tab)">Create PDF from…
+      <input type="file" id="importInput" multiple hidden
+        accept=".doc,.docx,.odt,.rtf,.xls,.xlsx,.ods,.csv,.ppt,.pptx,.odp,.png,.jpg,.jpeg,.gif,.bmp,.tif,.tiff,.webp,.svg,.txt,.html,.htm,.xps,.epub">
+    </label>
+    <button class="btn needs-doc" id="downloadBtn" title="Save the edited PDF (Ctrl+S)">Download</button>
+  </div>
+
+  <nav class="group menus">
+    <div class="menu">
+      <button class="btn needs-doc menu-btn">Pages ▾</button>
+      <div class="menu-list">
+        <label class="menu-item">Insert pages from file…
+          <input type="file" id="insertInput" multiple hidden
+            accept="application/pdf,.pdf,.docx,.xlsx,.pptx,.csv,.png,.jpg,.jpeg,.gif,.bmp,.tif,.tiff,.webp,.svg,.txt">
+        </label>
+        <button class="menu-item" data-action="blank">Insert blank page</button>
+        <button class="menu-item" data-action="cropTool">Crop pages (drag on page)</button>
+        <button class="menu-item" data-action="uncrop">Remove crop from selected / all</button>
+        <hr>
+        <button class="menu-item" data-action="extract">Extract selected pages</button>
+        <button class="menu-item" data-action="split">Split into files…</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="btn needs-doc menu-btn">Convert ▾</button>
+      <div class="menu-list">
+        <button class="menu-item" data-action="toDocx">PDF → Word (.docx)</button>
+        <button class="menu-item" data-action="toXlsx">PDF → Excel (.xlsx)</button>
+        <button class="menu-item" data-action="toPptx">PDF → PowerPoint (.pptx)</button>
+        <button class="menu-item" data-action="toImages">PDF → Images (JPG / PNG / WebP)…</button>
+        <hr>
+        <button class="menu-item" data-action="compress">Compress (smaller file)…</button>
+        <button class="menu-item" data-action="ocr">OCR: make scanned pages searchable…</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="btn needs-doc menu-btn">Security ▾</button>
+      <div class="menu-list">
+        <button class="menu-item" data-action="export">Password &amp; permissions…</button>
+        <button class="menu-item" data-action="cleanMeta">Remove hidden metadata</button>
+        <button class="menu-item" data-action="watermark">Watermark…</button>
+        <button class="menu-item" data-action="smartRedact">Smart redact (SSN, cards, emails…)…</button>
+        <hr>
+        <button class="menu-item" data-action="flatten">Flatten annotations &amp; forms</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="btn menu-btn">AI ▾</button>
+      <div class="menu-list">
+        <button class="menu-item needs-doc" data-action="aiSummary">Summarize this PDF</button>
+        <button class="menu-item needs-doc" data-action="aiChat">Chat with this PDF</button>
+        <button class="menu-item needs-doc" data-action="aiAutofill">Auto-fill form…</button>
+        <hr>
+        <button class="menu-item" data-action="aiSettings">Settings (API key)…</button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="group">
+    <button class="btn needs-doc" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
+    <button class="btn needs-doc" id="redoBtn" title="Redo (Ctrl+Y)">↷ Redo</button>
+  </div>
+  <div class="group">
+    <button class="btn needs-doc" id="zoomOut" title="Zoom out (Ctrl+−, or Ctrl+wheel)">−</button>
+    <span id="zoomLabel">100%</span>
+    <button class="btn needs-doc" id="zoomIn" title="Zoom in (Ctrl++)">+</button>
+    <button class="btn needs-doc" id="fitWidth" title="Fit width">↔ Width</button>
+    <button class="btn needs-doc" id="fitPage" title="Fit whole page">⤢ Page</button>
+  </div>
+  <div class="group">
+    <button class="btn" id="themeBtn" title="Switch light / dark mode">◐</button>
+  </div>
+</header>
+
+<div class="toolbar tools-row">
+  <div class="group tools" id="tools">
+    <button class="tool active" data-tool="select" title="Scroll / select pages">Pointer</button>
+    <button class="tool" data-tool="edittext" title="Click a line of existing text to change it">Edit text</button>
+    <button class="tool" data-tool="addtext" title="Click to add a text box">Add text</button>
+    <button class="tool" data-tool="image" title="Move, resize, rotate, crop or delete images in the PDF">Images</button>
+    <span class="sep"></span>
+    <button class="tool" data-tool="highlight" title="Drag over text to highlight">Highlight</button>
+    <button class="tool" data-tool="underline" title="Drag over text to underline">U̲</button>
+    <button class="tool" data-tool="strikeout" title="Drag over text to strike it out">S̶</button>
+    <button class="tool" data-tool="note" title="Click to add a sticky note / comment">Note</button>
+    <span class="sep"></span>
+    <button class="tool" data-tool="ink" title="Freehand drawing">Draw</button>
+    <button class="tool" data-tool="rect" title="Rectangle">▭</button>
+    <button class="tool" data-tool="ellipse" title="Ellipse">◯</button>
+    <button class="tool" data-tool="line" title="Line">╱</button>
+    <button class="tool" data-tool="arrow" title="Arrow">↗</button>
+    <span class="sep"></span>
+    <button class="tool" data-tool="whiteout" title="Permanently erase an area (white-out)">White-out</button>
+    <button class="tool" data-tool="redact" title="Permanently remove an area and black it out">Redact</button>
+    <button class="tool" data-tool="croppage" title="Drag the area of the page to keep">Crop page</button>
+    <span class="sep"></span>
+    <button class="tool" data-tool="sign" title="Draw, type or upload a signature, or place an image (PNG, JPG, SVG)">Sign / Image</button>
+    <button class="tool" data-tool="date" title="Click to stamp today's date">Date</button>
+    <button class="tool" data-tool="form" title="Fill in form fields">Fill form</button>
+    <button class="tool" data-tool="field" title="Drag to create a fillable form field">+ Field</button>
+    <button class="tool" data-tool="eraser" title="Click an annotation to delete it">Remove mark</button>
+  </div>
+  <div class="group props">
+    <label title="Colour">Colour <input type="color" id="colorInput" value="#d0021b"></label>
+    <label title="Font for Add text / Edit text. Automatic = match the PDF's own font when editing, standard font when adding.">Font
+      <select id="fontSelect"><option value="auto">Automatic</option></select>
+    </label>
+    <label class="btn small" title="Add a font file (.ttf / .otf), e.g. DIN Next LT Arabic">+ Font
+      <input type="file" id="fontInput" accept=".ttf,.otf,.ttc" hidden>
+    </label>
+    <label title="Font size for text">Size <input type="number" id="sizeInput" value="14" min="4" max="96"></label>
+    <button class="toggle" id="boldBtn" title="Bold (Add text)"><b>B</b></button>
+    <button class="toggle" id="italicBtn" title="Italic (Add text)"><i>I</i></button>
+    <select id="alignSelect" title="Alignment of multi-line text (Add text)">
+      <option value="left">⯇ Left</option>
+      <option value="center">≡ Center</option>
+      <option value="right">⯈ Right</option>
+    </select>
+    <label title="Line width">Width <input type="number" id="widthInput" value="2" min="0.5" max="20" step="0.5"></label>
+    <label title="Date format for the Date tool">Date
+      <select id="dateFormat">
+        <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+        <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+        <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+        <option value="D MMMM YYYY">D Month YYYY</option>
+        <option value="MMMM D, YYYY">Month D, YYYY</option>
+      </select>
+    </label>
+  </div>
+</div>
+
+<div class="tabs-bar" id="tabsBar" hidden></div>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="side-head">
+      <span id="docName">No document</span>
+      <span id="selInfo"></span>
+      <span id="saveState" class="save-state"></span>
+    </div>
+    <div class="side-actions">
+      <button class="btn small needs-doc" id="selAllBtn">Select all</button>
+      <button class="btn small needs-sel" id="rotLBtn" title="Rotate selected left">⟲</button>
+      <button class="btn small needs-sel" id="rotRBtn" title="Rotate selected right">⟳</button>
+      <button class="btn small needs-sel" id="rot180Btn" title="Rotate selected 180°">180°</button>
+      <button class="btn small needs-sel danger" id="delPagesBtn">Delete</button>
+      <button class="btn small needs-sel" id="extractBtn" title="Download selected pages as a new PDF">Extract</button>
+      <button class="btn small needs-doc" id="blankBtn" title="Insert a blank page after the selected (or last) page">+ Blank</button>
+    </div>
+    <p class="hint">Drag thumbnails to reorder. Click to jump, Ctrl/Shift-click to select.</p>
+    <div id="thumbs"></div>
+  </aside>
+
+  <main id="viewer">
+    <div id="dropZone" class="drop-zone">
+      <div>
+        <h1>PDF Editor</h1>
+        <p>Drop PDFs here (or Word, Excel, PowerPoint, images to convert), or</p>
+        <label class="btn primary big">Choose a PDF
+          <input type="file" id="openInput2" accept="application/pdf,.pdf" multiple hidden>
+        </label>
+        <p class="muted">Everything runs on this computer. Only the AI features send the document to Claude.</p>
+      </div>
+    </div>
+    <div id="pages"></div>
+  </main>
+
+  <aside class="ai-panel" id="aiPanel" hidden>
+    <div class="ai-head">
+      <strong>AI assistant</strong>
+      <button class="btn small" id="aiClose" title="Close">✕</button>
+    </div>
+    <div class="ai-actions">
+      <select id="aiLength" title="Summary length">
+        <option value="short">Short</option>
+        <option value="medium" selected>Medium</option>
+        <option value="long">Detailed</option>
+      </select>
+      <button class="btn small" id="aiSummarizeBtn">Summarize</button>
+      <button class="btn small" id="aiClearBtn" title="Start a new conversation">New chat</button>
+    </div>
+    <div class="ai-log" id="aiLog">
+      <p class="muted">Ask anything about the open PDF, e.g. “What is the expiry date of this license?”</p>
+    </div>
+    <form class="ai-input" id="aiForm">
+      <textarea id="aiQuestion" rows="2" placeholder="Ask a question… (Enter to send)" dir="auto"></textarea>
+      <button class="btn primary" type="submit">Ask</button>
+    </form>
+  </aside>
+</div>
+
+<div id="toolHint" class="tool-hint" hidden></div>
+<div id="formBar" class="form-bar" hidden>
+  <button class="btn" id="fillDatesBtn" title="Put today's date into empty date fields">Fill dates</button>
+  <button class="btn" id="aiFillBtn" title="Let AI suggest values for the fields">AI auto-fill…</button>
+  <button class="btn primary" id="saveFormBtn">Save form values</button>
+</div>
+<div id="imageBar" class="image-bar" hidden>
+  <button class="btn small" data-img="rotate" title="Turn 90° clockwise">⟳ Rotate</button>
+  <button class="btn small" data-img="crop" title="Then drag over the part of the image to keep">✂ Crop</button>
+  <button class="btn small danger" data-img="delete" title="Delete image (Del)">🗑 Delete</button>
+</div>
+<div id="toast" class="toast" hidden></div>
+<div id="busy" class="busy" hidden>Working…</div>
+
+<!-- Signature / image dialog -->
+<dialog id="signDialog">
+  <form method="dialog" class="dialog-body">
+    <h2>Signature or image</h2>
+    <div class="tabs">
+      <button type="button" class="tab active" data-tab="draw">Draw</button>
+      <button type="button" class="tab" data-tab="type">Type</button>
+      <button type="button" class="tab" data-tab="upload">Upload image</button>
+    </div>
+    <div class="tab-panel" data-panel="draw">
+      <canvas id="signCanvas" width="560" height="200"></canvas>
+      <div class="row">
+        <label>Ink <input type="color" id="signColor" value="#0b2a8a"></label>
+        <button type="button" class="btn small" id="signClear">Clear</button>
+        <button type="button" class="btn small" id="signLast" hidden>Use last signature</button>
+      </div>
+    </div>
+    <div class="tab-panel" data-panel="type" hidden>
+      <input type="text" id="typedName" placeholder="Type your name" dir="auto" class="wide">
+      <div class="row">
+        <label>Style
+          <select id="typedFont">
+            <option value="Segoe Script">Segoe Script</option>
+            <option value="Ink Free">Ink Free</option>
+            <option value="Lucida Handwriting">Lucida Handwriting</option>
+            <option value="Brush Script MT">Brush Script</option>
+            <option value="Mistral">Mistral</option>
+            <option value="cursive">Generic cursive</option>
+          </select>
+        </label>
+        <label>Ink <input type="color" id="typedColor" value="#0b2a8a"></label>
+      </div>
+      <canvas id="typedCanvas" width="560" height="140"></canvas>
+    </div>
+    <div class="tab-panel" data-panel="upload" hidden>
+      <input type="file" id="imageInput" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif">
+      <img id="imagePreview" alt="" hidden>
+    </div>
+    <div class="row end">
+      <button value="cancel" class="btn">Cancel</button>
+      <button type="button" class="btn primary" id="signUse">Place on page</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
