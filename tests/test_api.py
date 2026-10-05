@@ -374,6 +374,32 @@ class ApiTest(unittest.TestCase):
             if env is not None:
                 os.environ["ANTHROPIC_API_KEY"] = env
 
+    def test_edit_text_uses_similar_font(self):
+        doc = pymupdf.open()
+        p = doc.new_page()
+        p.insert_text((72, 100), "Helvetica bold line", fontname="hebo", fontsize=14)
+        p.insert_text((72, 140), "Times italic line", fontname="tiit", fontsize=14)
+        d = self.open(doc.tobytes())["id"]
+        lines = self.c.get(f"/api/doc/{d}/page/0/lines").get_json()
+        helv = next(l for l in lines if l["text"].startswith("Helvetica"))
+        times = next(l for l in lines if l["text"].startswith("Times"))
+        self.assertEqual(helv["match"]["name"], "TeX Gyre Heros Bold")
+        self.assertIn("Italic", times["match"]["name"])
+        # The browser can load the matched font to preview the text.
+        r = self.c.get(f"/api/fonts/file/{helv['match']['id']}")
+        self.assertEqual(r.status_code, 200)
+        pymupdf.Font(fontbuffer=r.data)
+        r.close()
+        self.assertEqual(self.c.get("/api/fonts/file/user:nope.ttf").status_code, 404)
+        # Editing writes the new text in that font.
+        r = self.op(d, op="edit_text", page=0, pageBbox=helv["pageBbox"], text="Changed bold line")
+        self.assertIn("TeX Gyre Heros Bold", r.get_json()["message"])
+        page = self.pdf(d)[0]
+        spans = [s for b in page.get_text("dict")["blocks"] for l in b.get("lines", []) for s in l["spans"]]
+        changed = next(s for s in spans if "Changed" in s["text"])
+        self.assertIn("TeXGyreHeros-Bold", changed["font"].replace(" ", ""))
+        self.assertNotIn("Helvetica bold line", page.get_text())
+
     def test_version_changes_after_history_is_full(self):
         # Page images are cached by version, so it must change on every edit,
         # even once old undo steps are being dropped.

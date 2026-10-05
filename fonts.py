@@ -45,7 +45,11 @@ def norm(name):
     name = re.sub(r"^[A-Z]{6}\+", "", name or "")
     name = re.sub(r"[^a-z0-9]", "", name.lower())
     name = re.sub(r"(psmt|mt|ps)$", "", name)
-    return re.sub(r"(regular|roman|book|normal)$", "", name)
+    # Repeat, so "Times New Roman Regular" and "Times New Roman" agree.
+    prev = None
+    while prev != name:
+        prev, name = name, re.sub(r"(regular|roman|book|normal)$", "", name)
+    return name
 
 
 def _scan_dir(folder, group):
@@ -139,6 +143,84 @@ def lookalike(original, text, flags=0):
     if is_rtl(text):
         return find_by_name(f"Tajawal {w}", f"Noto Kufi Arabic {w}", "Tajawal Regular")
     return find_by_name(f"Barlow {w}", "Barlow Regular")
+
+
+# Fonts often found in PDFs -> installed or bundled fonts that look (and space) the
+# same, best first. Checked in order against the PDF font's name, so the narrow /
+# condensed families come before their regular-width relatives.
+SIMILAR = [
+    (r"(helvetica|arial|nimbussans|swiss)\w*(narrow|condensed|cond|cn|compressed)",
+     ["Arial Narrow", "TeX Gyre Heros Cn", "Liberation Sans Narrow"]),
+    (r"helvetica|nimbussans|swiss721|texgyreheros|freesans",
+     ["TeX Gyre Heros", "Arial", "Liberation Sans"]),
+    (r"arial|liberationsans|arimo",
+     ["Arial", "Liberation Sans", "TeX Gyre Heros"]),
+    (r"times|nimbusroman|tinos|liberationserif|texgyretermes|freeserif",
+     ["Times New Roman", "Liberation Serif"]),
+    (r"courier|nimbusmono|cousine|liberationmono|freemono",
+     ["Courier New", "Liberation Mono"]),
+    (r"calibri|carlito|segoe|verdana|tahoma|trebuchet|opensans|roboto|lato|sourcesans|frutiger"
+     r"|myriad|univers|gillsans|futura|montserrat|inter|notosans|dejavusans|ubuntu|poppins",
+     ["Arial", "Liberation Sans", "TeX Gyre Heros"]),
+    (r"georgia|cambria|caladea|garamond|palatino|bookantiqua|minion|baskerville|bookman"
+     r"|century|notoserif|dejavuserif|merriweather",
+     ["Times New Roman", "Liberation Serif"]),
+    (r"consolas|lucidaconsole|menlo|monaco|sourcecode|inconsolata|mono",
+     ["Courier New", "Liberation Mono"]),
+]
+
+
+def style_of(fontname, flags=0):
+    """(bold, italic) from a PDF font name like 'Helvetica-BoldOblique' or 'Arial,Bold'."""
+    n = (fontname or "").lower()
+    bold = weight_of(fontname, flags) == "Bold"
+    italic = "italic" in n or "oblique" in n or bool(flags & 2)
+    return bold, italic
+
+
+def _family(fam, bold, italic, text):
+    """The installed member of family `fam` in the wanted style, if it can write `text`."""
+    base = find_by_name(f"{fam} Regular", fam)
+    if base is None:
+        return None
+    info = variant(base, bold, italic)
+    return info if supports(font_bytes(info), text) else None
+
+
+def similar(original, flags, text):
+    """The closest available font to the PDF font `original` for writing `text`.
+
+    Returns (font info, explanation) or (None, None).
+    """
+    bold, italic = style_of(original, flags)
+    # Paid fonts with free near-identical stand-ins (DIN Next -> Tajawal / Barlow).
+    info = lookalike(original, text, flags)
+    if info and supports(font_bytes(info), text):
+        return info, f"{info['name']} (look-alike for {original})"
+    if not is_rtl(text):
+        key = norm(original)
+        for pattern, families in SIMILAR:
+            if re.search(pattern, key):
+                for fam in families:
+                    info = _family(fam, bold, italic, text)
+                    if info:
+                        return info, f"{info['name']} (look-alike for {original})"
+                break
+    # Nothing known: go by the kind of font (fixed-width / serif / sans).
+    name = (original or "").lower()
+    if "cour" in name or "mono" in name or flags & 8:
+        kind = "mono"
+    elif "times" in name or ("serif" in name and "sans" not in name) or flags & 4:
+        kind = "serif"
+    else:
+        kind = "sans"
+    info = fallback_font(text, bold, italic, kind)
+    if info:
+        styled = variant(info, bold, italic)
+        if supports(font_bytes(styled), text):
+            info = styled
+        return info, f"{info['name']} (closest match; {original} is not installed)"
+    return None, None
 
 
 STYLE_SUFFIX = re.compile(

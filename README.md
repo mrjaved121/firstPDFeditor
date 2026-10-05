@@ -81,7 +81,20 @@ To try the hosted build locally: `docker build -t pdf-editor .` then
 ## Fonts
 
 Put `.ttf` / `.otf` files in `fonts/` (or use **+ Font**) to make them available for adding and editing text.
-The bundled Tajawal, Noto Kufi Arabic and Barlow fonts are used as free look-alikes for DIN Next.
+
+**Edit text** detects the PDF's font and writes your changes in the same font when it can, or else in the
+closest free look-alike, keeping bold and italic. The typing box shows that font and names it.
+
+| PDF font | Used for edits |
+|---|---|
+| Helvetica | TeX Gyre Heros (bundled) |
+| Helvetica Condensed, Arial Narrow | TeX Gyre Heros Cn (bundled) |
+| Arial | Arial, else Liberation Sans (bundled, same letter widths) |
+| Times, Times New Roman | Times New Roman, else Liberation Serif (bundled) |
+| Courier, Courier New | Courier New, else Liberation Mono (bundled) |
+| DIN Next | Tajawal for Arabic, Barlow for Latin (bundled) |
+
+See `fonts/README.txt` for the full list and the font licences.
 
 ## Tests
 

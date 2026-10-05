@@ -415,14 +415,24 @@ def api_lines(doc_id, n):
     """Text lines on a page, for the Edit Text tool."""
     doc = open_current(get_entry(doc_id))
     page = doc[n]
-    return jsonify([{
-        "bbox": rect_to_display(page, seg["bbox"]),
-        "pageBbox": list(seg["bbox"]),
-        "text": seg["text"],
-        "size": round(seg["span"]["size"], 2),
-        "font": seg["span"]["font"],
-        "color": "#%06x" % seg["span"]["color"],
-    } for seg in text_segments(page)])
+    out, matches = [], {}
+    for seg in text_segments(page):
+        span = seg["span"]
+        # The font Edit text will use, so the typing box can show it.
+        key = (span["font"], span["flags"], fonts.is_rtl(seg["text"]))
+        if key not in matches:
+            info, why = matching_font(span, seg["text"])
+            matches[key] = {"id": info["id"], "name": info["name"], "why": why} if info else None
+        out.append({
+            "bbox": rect_to_display(page, seg["bbox"]),
+            "pageBbox": list(seg["bbox"]),
+            "text": seg["text"],
+            "size": round(span["size"], 2),
+            "font": span["font"],
+            "color": "#%06x" % span["color"],
+            "match": matches[key],
+        })
+    return jsonify(out)
 
 
 def text_segments(page):
@@ -617,6 +627,18 @@ def api_convert(doc_id, fmt):
 @app.get("/api/fonts")
 def api_fonts():
     return jsonify(fonts.font_list())
+
+
+@app.get("/api/fonts/file/<path:font_id>")
+def api_font_file(font_id):
+    """A font's file, so the browser can show text in it while typing."""
+    info = fonts.all_fonts().get(font_id)
+    if info is None:
+        abort(404)
+    otf = info["path"].lower().endswith(".otf")
+    resp = send_file(info["path"], mimetype="font/otf" if otf else "font/ttf")
+    resp.headers["Cache-Control"] = "max-age=86400"
+    return resp
 
 
 @app.post("/api/fonts")
@@ -1182,24 +1204,25 @@ def _font_for_edit(doc, page, span, text, choice):
             continue
         if buf and ext in ("ttf", "otf", "cff") and fonts.supports(buf, text):
             return buf, f"{original} (from this PDF)"
-    # 2. The same font installed on this computer or in the fonts folder.
+    # 2. The same font installed, else 3. the closest look-alike.
+    info, why = matching_font(span, text)
+    if info:
+        return fonts.font_bytes(info), why
+    return None, None
+
+
+def matching_font(span, text):
+    """(font info, description) of the installed font automatic editing uses for this span.
+
+    The same font when it is installed (or in fonts/), otherwise the closest
+    look-alike: Helvetica -> TeX Gyre Heros, Arial -> Liberation Sans, Times ->
+    Liberation Serif, DIN Next -> Tajawal / Barlow, keeping bold and italic.
+    """
+    original = span["font"]
     info = fonts.find_by_name(original)
     if info and fonts.supports(fonts.font_bytes(info), text):
-        return fonts.font_bytes(info), info["name"]
-    # 3. A free look-alike for known paid fonts (DIN Next -> Tajawal / Barlow).
-    info = fonts.lookalike(original, text, span["flags"])
-    if info and fonts.supports(fonts.font_bytes(info), text):
-        return fonts.font_bytes(info), f"{info['name']} (look-alike for {original})"
-    # 4. The closest common font.
-    name, flags = original.lower(), span["flags"]
-    family = ("mono" if "cour" in name or "mono" in name or flags & 8 else
-              "serif" if "times" in name or flags & 4 else "sans")
-    bold = "bold" in name or "black" in name or bool(flags & 16)
-    italic = "italic" in name or "oblique" in name or bool(flags & 2)
-    info = fonts.fallback_font(text, bold, italic, family)
-    if info:
-        return fonts.font_bytes(info), f"{info['name']} (closest match; {original} is not installed)"
-    return None, None
+        return info, info["name"]
+    return fonts.similar(original, span["flags"], text)
 
 
 def op_delete_annot(doc, b):

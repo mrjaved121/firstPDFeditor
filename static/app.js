@@ -464,7 +464,7 @@ function place(el, [x0, y0, x1, y1]) {
 function addTextLineBox(overlay, n, line) {
   const box = document.createElement("div");
   box.className = "text-line";
-  box.title = line.text;
+  box.title = line.match ? `${line.text}\nFont: ${line.match.why}` : line.text;
   place(box, line.bbox);
   box.addEventListener("pointerdown", (e) => e.stopPropagation());
   box.addEventListener("click", (e) => {
@@ -479,15 +479,31 @@ function addTextLineBox(overlay, n, line) {
     input.style.height = px(y1 - y0 + 2);
     input.style.fontSize = px(line.size * 0.95);
     input.style.color = line.color;
-    input.style.fontFamily = previewFont(line.font);
     input.dir = "auto";
+    // Show the text in the font that will be used: the one picked in the Font
+    // menu, or (Automatic) the PDF's own font / its closest look-alike.
+    const auto = $("#fontSelect").value === "auto";
+    input.style.fontFamily = previewFont(line.font);
+    let badge = null;
+    if (auto && line.match) {
+      useFontFace(line.match.id).then((family) => {
+        if (family) input.style.fontFamily = `"${family}", ${previewFont(line.font)}`;
+      });
+      badge = document.createElement("div");
+      badge.className = "font-badge";
+      badge.textContent = `Font: ${line.match.why}`;
+      badge.style.left = px(x0);
+      badge.style.top = `${(y1 + 2) * state.scale + 4}px`;
+    }
     box.replaceWith(input);
+    if (badge) input.after(badge);
     input.focus();
     input.select();
     let done = false;
     const finish = (save) => {
       if (done) return;
       done = true;
+      badge?.remove();
       if (save && input.value !== line.text) {
         op({ op: "edit_text", page: n, pageBbox: line.pageBbox, text: input.value, font: $("#fontSelect").value });
       } else {
@@ -1418,6 +1434,18 @@ async function loadFonts(selectId) {
     sel.appendChild(og);
   }
   sel.value = [...sel.options].some((o) => o.value === keep) ? keep : "auto";
+}
+
+// Load a font from the server into the page (for previewing text in it).
+// Resolves to the CSS family name, or null if the browser can't use it.
+const fontFaces = new Map();
+function useFontFace(id) {
+  if (!fontFaces.has(id)) {
+    const family = `pdfed-${fontFaces.size}`;
+    const face = new FontFace(family, `url(/api/fonts/file/${encodeURIComponent(id)})`);
+    fontFaces.set(id, face.load().then((f) => { document.fonts.add(f); return family; }).catch(() => null));
+  }
+  return fontFaces.get(id);
 }
 
 // CSS font-family for the on-screen typing box (browsers can use installed fonts by name).
