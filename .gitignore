@@ -4,3 +4,6 @@ __pycache__/
 workspace/
 config.json
 .claude/
+
+# Environment files (may hold API keys)
+.env
