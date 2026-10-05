@@ -20,6 +20,12 @@ USER_FONT_DIR = Path(__file__).parent / "fonts"
 SYSTEM_FONT_DIRS = [
     Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts",
     Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts",
+    # Linux / macOS (searched including sub-folders)
+    Path("/usr/share/fonts"),
+    Path("/usr/local/share/fonts"),
+    Path.home() / ".fonts",
+    Path("/Library/Fonts"),
+    Path("/System/Library/Fonts"),
 ]
 FONT_EXTS = (".ttf", ".otf", ".ttc")
 
@@ -46,7 +52,8 @@ def _scan_dir(folder, group):
     found = []
     if not folder.is_dir():
         return found
-    for path in sorted(folder.iterdir()):
+    paths = folder.iterdir() if group == "user" else folder.rglob("*")
+    for path in sorted(paths):
         if path.suffix.lower() not in FONT_EXTS:
             continue
         try:
@@ -169,11 +176,17 @@ def fallback_font(text, bold=False, italic=False, family="sans"):
         cands = [f"Tajawal{b or ' Regular'}", f"Noto Kufi Arabic{b or ' Regular'}",
                  f"Segoe UI{b}", f"Arial{b}", f"Tahoma{b}"]
     elif family == "serif":
-        cands = [f"Times New Roman{b}{i}", f"Times New Roman{b}"]
+        cands = [f"Times New Roman{b}{i}", f"Times New Roman{b}",
+                 f"Liberation Serif{b}{i}", f"Liberation Serif{b}", f"DejaVu Serif{b}"]
     elif family == "mono":
-        cands = [f"Courier New{b}{i}", f"Courier New{b}"]
+        cands = [f"Courier New{b}{i}", f"Courier New{b}",
+                 f"Liberation Mono{b}{i}", f"Liberation Mono{b}", f"DejaVu Sans Mono{b}"]
     else:
-        cands = [f"Arial{b}{i}", f"Arial{b}", "Arial"]
+        cands = []
+    # Arial, or its look-alike on Linux, then the fonts bundled in fonts/.
+    cands += [f"Arial{b}{i}", f"Arial{b}", "Arial",
+              f"Liberation Sans{b}{i}", f"Liberation Sans{b}", "Liberation Sans",
+              f"DejaVu Sans{b}", "DejaVu Sans", f"Barlow{b or ' Regular'}", "Barlow Regular"]
     return find_by_name(*cands)
 
 

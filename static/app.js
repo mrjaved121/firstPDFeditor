@@ -267,7 +267,9 @@ function applySummary(summary, fresh = false) {
   for (const n of [...state.selected]) if (n >= summary.pages.length) state.selected.delete(n);
   $("#dropZone").hidden = true;
   $("#docName").textContent = summary.name;
-  $("#saveState").textContent = summary.version > 0 ? "✓ Changes auto-saved on this computer" : "";
+  $("#saveState").textContent = !summary.edited ? ""
+    : state.caps.hosted ? "✓ Changes saved on the server while you work (download to keep them)"
+    : "✓ Changes auto-saved on this computer";
   document.title = `${summary.name} – PDF Editor`;
   const keepScroll = !fresh && prev && prev.id === summary.id ? $("#viewer").scrollTop : null;
   renderPages();
@@ -275,7 +277,7 @@ function applySummary(summary, fresh = false) {
   renderTabs();
   if (keepScroll != null) $("#viewer").scrollTop = keepScroll;
   updateButtons();
-  if (summary.hasForms && fresh && summary.version === 0) toast("This PDF has form fields. Use “Fill form” to fill them in.");
+  if (summary.hasForms && fresh && !summary.edited) toast("This PDF has form fields. Use “Fill form” to fill them in.");
 }
 
 function pageImgUrl(n, zoom) {
@@ -1257,9 +1259,22 @@ function renderAiLog() {
   log.scrollTop = log.scrollHeight;
 }
 
+// On a hosted copy each visitor's key stays in their own browser and is sent
+// with each AI request; locally the key is saved on this computer by the server.
+const BROWSER_KEY = "pdfeditor.anthropicKey";
+function browserKey() {
+  try { return localStorage.getItem(BROWSER_KEY) || ""; } catch { return ""; }
+}
+
 async function ensureAiKey() {
-  if (state.caps.ai.configured) return true;
+  if (state.caps.ai.configured || (state.caps.hosted && browserKey())) return true;
   return aiSettings("Add your Anthropic API key to use the AI features.");
+}
+
+function aiPost(path, body) {
+  const headers = { "Content-Type": "application/json" };
+  if (state.caps.hosted && browserKey()) headers["X-Anthropic-Key"] = browserKey();
+  return api(docUrl(path), { method: "POST", headers, body: JSON.stringify(body) });
 }
 
 async function aiRequest(path, body, display) {
@@ -1271,7 +1286,7 @@ async function aiRequest(path, body, display) {
   msgs.push(pending);
   renderAiLog();
   try {
-    const res = await postJson(docUrl(path), body);
+    const res = await aiPost(path, body);
     Object.assign(pending, { content: res.text, pending: false });
     return res.text;
   } catch (e) {
@@ -1295,6 +1310,7 @@ async function askQuestion(text) {
 }
 
 async function aiSettings(reason) {
+  if (state.caps.hosted) return browserKeySettings(reason);
   const caps = state.caps.ai;
   const status = caps.configured
     ? `A key is set (from ${caps.source === "settings" ? "these settings" : "the ANTHROPIC_API_KEY environment variable"}).`
@@ -1318,6 +1334,27 @@ async function aiSettings(reason) {
   return state.caps.ai.configured;
 }
 
+async function browserKeySettings(reason) {
+  const has = !!browserKey();
+  const shared = state.caps.ai.configured;
+  const r = await ask({
+    title: "AI settings",
+    body: `${reason ? `<p>${esc(reason)}</p>` : ""}
+      <p class="muted">${has ? "Your key is saved in this browser." : shared ? "This site provides a key; you can use your own instead." : "No key is set yet."}
+        Get a key at console.anthropic.com. It is kept only in this browser and sent with your AI requests;
+        the AI features send the open document to Claude (model claude-opus-5-5).</p>
+      <label class="field">Anthropic API key<input type="password" name="key" placeholder="sk-ant-…" autocomplete="off"></label>
+      ${has ? `<label class="check"><input type="checkbox" name="remove"> Remove my key from this browser</label>` : ""}`,
+    ok: "Save",
+  });
+  if (!r) return false;
+  try {
+    if (r.remove) { localStorage.removeItem(BROWSER_KEY); toast("API key removed."); }
+    else if (r.key.trim()) { localStorage.setItem(BROWSER_KEY, r.key.trim()); toast("API key saved in this browser."); }
+  } catch { toast("This browser can't store the key (private mode?).", true); }
+  return !!browserKey() || shared;
+}
+
 async function aiAutofill() {
   if (!state.doc) return;
   if (!state.doc.hasForms) { toast("This PDF has no fillable form fields. Use “+ Field” to add some first.", true); return; }
@@ -1338,7 +1375,7 @@ async function aiAutofill() {
     else localStorage.removeItem("pdfeditor.autofillInfo");
   } catch {}
   let res;
-  try { res = await postJson(docUrl("/ai/autofill"), { info: r.info }); }
+  try { res = await aiPost("/ai/autofill", { info: r.info }); }
   catch (e) { toast(e.message, true); return; }
   const values = res.values || {};
   if (state.tool !== "form") setTool("form");
@@ -1368,7 +1405,7 @@ async function loadFonts(selectId) {
   const sel = $("#fontSelect");
   const keep = selectId || sel.value;
   sel.innerHTML = '<option value="auto">Automatic</option>';
-  for (const [group, label] of [["user", "Your fonts"], ["system", "Windows fonts"]]) {
+  for (const [group, label] of [["user", "Your fonts"], ["system", "Installed fonts"]]) {
     const items = list.filter((f) => f.group === group);
     if (!items.length) continue;
     const og = document.createElement("optgroup");
@@ -1738,7 +1775,11 @@ function setup() {
 
   setTool("select");
   updateButtons();
-  fetch("/api/capabilities").then((r) => r.json()).then((c) => (state.caps = c)).catch(() => {});
+  fetch("/api/capabilities").then((r) => r.json()).then((c) => {
+    state.caps = c;
+    // Fonts can't be added to a shared server.
+    if (c.hosted) $("#fontInput").closest("label").hidden = true;
+  }).catch(() => {});
   restoreTabs();
 }
 

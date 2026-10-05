@@ -58,7 +58,12 @@ def main():
             return page.evaluate("state.doc ? state.doc.version : -1")
 
         def wait_change(before, timeout=15000):
-            page.wait_for_function(f"state.doc && state.doc.version !== {before}", timeout=timeout)
+            try:
+                page.wait_for_function(f"state.doc && state.doc.version !== {before}", timeout=timeout)
+            except Exception:
+                page.screenshot(path=SHOTS / "failure.png")
+                print(f"  step '{step[0]}' failed; message shown: {page.locator('#toast').text_content()!r}")
+                raise
 
         def page_box(n=0):
             return page.locator(f'.page[data-page="{n}"] .overlay').bounding_box()

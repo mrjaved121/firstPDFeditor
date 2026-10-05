@@ -54,8 +54,8 @@ def status():
     return {"configured": False, "source": None}
 
 
-def _client():
-    key = saved_key()
+def _client(api_key=None):
+    key = api_key or saved_key()
     try:
         return anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
     except Exception as e:
@@ -82,8 +82,8 @@ def _document_block(pdf_bytes, doc):
             "cache_control": {"type": "ephemeral"}}
 
 
-def _call(system, messages, max_tokens=16000, output_format=None):
-    client = _client()
+def _call(system, messages, max_tokens=16000, output_format=None, api_key=None):
+    client = _client(api_key)
     kwargs = dict(
         model=MODEL,
         max_tokens=max_tokens,
@@ -126,17 +126,17 @@ SYSTEM = ("You help people understand a PDF document they have open in a PDF edi
           "Reply in the language of the user's question (or of the document, if no question).")
 
 
-def summarize(pdf_bytes, doc, length="medium"):
+def summarize(pdf_bytes, doc, length="medium", api_key=None):
     target = {"short": "in 3-5 bullet points",
               "medium": "in a short overview paragraph followed by the key points as bullets",
               "long": "section by section, with the key facts, figures, dates and obligations"}.get(length)
     if target is None:
         target = "in a short overview paragraph followed by the key points as bullets"
     content = [_document_block(pdf_bytes, doc), {"type": "text", "text": f"Summarize this document {target}."}]
-    return _call(SYSTEM, [{"role": "user", "content": content}])
+    return _call(SYSTEM, [{"role": "user", "content": content}], api_key=api_key)
 
 
-def chat(pdf_bytes, doc, history):
+def chat(pdf_bytes, doc, history, api_key=None):
     """`history` is [{"role": "user"|"assistant", "content": str}, ...] ending with a user turn."""
     msgs = [{"role": m["role"], "content": str(m["content"])} for m in history
             if m.get("role") in ("user", "assistant") and str(m.get("content", "")).strip()]
@@ -147,7 +147,7 @@ def chat(pdf_bytes, doc, history):
     # The document goes in the first user turn so it stays cached across the chat.
     msgs[0] = {"role": "user", "content": [_document_block(pdf_bytes, doc),
                                            {"type": "text", "text": msgs[0]["content"]}]}
-    return _call(SYSTEM, msgs)
+    return _call(SYSTEM, msgs, api_key=api_key)
 
 
 AUTOFILL_SCHEMA = {
@@ -174,7 +174,7 @@ AUTOFILL_SCHEMA = {
 }
 
 
-def autofill(pdf_bytes, doc, fields, info):
+def autofill(pdf_bytes, doc, fields, info, api_key=None):
     """Suggest values for form fields from free-text `info`. Returns {xref: value}."""
     if not fields:
         raise AIError("This PDF has no fillable form fields.")
@@ -191,7 +191,8 @@ def autofill(pdf_bytes, doc, fields, info):
         "Leave out fields you cannot fill; never invent personal data."
     )
     content = [_document_block(pdf_bytes, doc), {"type": "text", "text": prompt}]
-    text = _call(SYSTEM, [{"role": "user", "content": content}], output_format=AUTOFILL_SCHEMA)
+    text = _call(SYSTEM, [{"role": "user", "content": content}], output_format=AUTOFILL_SCHEMA,
+                 api_key=api_key)
     try:
         data = json.loads(text)
     except ValueError as e:

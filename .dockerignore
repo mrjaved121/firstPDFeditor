@@ -1,0 +1,7 @@
+.git
+.claude
+__pycache__
+*.pyc
+workspace
+config.json
+tests

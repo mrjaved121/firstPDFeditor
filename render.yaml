@@ -1,0 +1,10 @@
+# Render Blueprint: New > Blueprint in the Render dashboard, pick this repo.
+services:
+  - type: web
+    name: pdf-editor
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/capabilities
+    envVars:
+      - key: PDFEDITOR_HOSTED
+        value: "1"

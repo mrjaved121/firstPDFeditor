@@ -374,11 +374,91 @@ class ApiTest(unittest.TestCase):
             if env is not None:
                 os.environ["ANTHROPIC_API_KEY"] = env
 
+    def test_version_changes_after_history_is_full(self):
+        # Page images are cached by version, so it must change on every edit,
+        # even once old undo steps are being dropped.
+        d = self.open()["id"]
+        seen = set()
+        for i in range(server.MAX_HISTORY + 5):
+            v = self.op(d, op="rect", page=0, rect=[10, 10, 20 + i, 20]).get_json()["version"]
+            self.assertNotIn(v, seen)
+            seen.add(v)
+        v = self.c.post(f"/api/doc/{d}/undo").get_json()["version"]
+        self.assertNotIn(v, seen)
+
     def test_unknown_op_and_bad_input(self):
         d = self.open()["id"]
         self.assertEqual(self.op(d, ok=False, op="nope").status_code, 400)
         self.assertEqual(self.op(d, ok=False, op="rotate").status_code, 400)  # missing keys
         self.assertEqual(self.c.get("/api/doc/missing").status_code, 404)
+
+
+
+class HostedTest(unittest.TestCase):
+    """PDFEDITOR_HOSTED=1: visitors are kept apart and server settings are locked."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = (server.WORKSPACE, server.HOSTED, server.MAX_DOCS_PER_OWNER, server.SHARE_AI_KEY)
+        server.WORKSPACE = Path(self.tmp.name)
+        server.HOSTED, server.MAX_DOCS_PER_OWNER, server.SHARE_AI_KEY = True, 2, False
+        server.DOCS.clear()
+        self.alice = server.app.test_client()
+        self.bob = server.app.test_client()
+
+    def tearDown(self):
+        server.WORKSPACE, server.HOSTED, server.MAX_DOCS_PER_OWNER, server.SHARE_AI_KEY = self.saved
+        server.DOCS.clear()
+        self.tmp.cleanup()
+
+    def open(self, client, data=None):
+        return client.post("/api/open", data={"file": (io.BytesIO(data or sample_pdf()), "a.pdf")},
+                           content_type="multipart/form-data")
+
+    def test_visitors_are_isolated(self):
+        r = self.open(self.alice)
+        self.assertEqual(r.status_code, 200)
+        doc_id = r.get_json()["id"]
+        self.assertIn("pdfeditor_owner", r.headers.get("Set-Cookie", ""))
+        self.assertEqual(len(self.alice.get("/api/docs").get_json()), 1)
+        self.assertEqual(self.bob.get("/api/docs").get_json(), [])
+        for method, url in (("get", f"/api/doc/{doc_id}"), ("get", f"/api/doc/{doc_id}/download"),
+                            ("get", f"/api/doc/{doc_id}/page/0.png"), ("delete", f"/api/doc/{doc_id}")):
+            self.assertEqual(getattr(self.bob, method)(url).status_code, 404, url)
+        r = self.bob.post(f"/api/doc/{doc_id}/op", json={"op": "delete", "pages": [0]})
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(self.alice.get(f"/api/doc/{doc_id}").status_code, 200)
+
+    def test_limits_and_locked_settings(self):
+        self.assertEqual(self.open(self.alice).status_code, 200)
+        self.assertEqual(self.open(self.alice).status_code, 200)
+        r = self.open(self.alice)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Close a tab", r.get_json()["error"])
+        self.assertEqual(self.alice.post("/api/settings", json={"anthropicKey": "x"}).status_code, 403)
+        r = self.alice.post("/api/fonts", data={"file": (io.BytesIO(b"x"), "f.ttf")},
+                            content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 403)
+        caps = self.alice.get("/api/capabilities").get_json()
+        self.assertTrue(caps["hosted"])
+        self.assertFalse(caps["ai"]["configured"])
+
+    def test_ai_needs_visitor_key(self):
+        doc_id = self.open(self.alice).get_json()["id"]
+        r = self.alice.post(f"/api/doc/{doc_id}/ai/summary", json={})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("your browser", r.get_json()["error"])
+
+    def test_idle_documents_are_forgotten(self):
+        doc_id = self.open(self.alice).get_json()["id"]
+        server.DOCS[doc_id]["touched"] -= 7 * 3600
+        server._last_sweep[0] = 0
+        saved = server.IDLE_HOURS
+        server.IDLE_HOURS = 6
+        try:
+            self.assertEqual(self.alice.get("/api/docs").get_json(), [])
+        finally:
+            server.IDLE_HOURS = saved
 
 
 if __name__ == "__main__":

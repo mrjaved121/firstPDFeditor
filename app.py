@@ -13,9 +13,11 @@ browser close or a server restart (undo history does not).
 import base64
 import io
 import json
+import os
 import re
 import secrets
 import threading
+import time
 import unicodedata
 import uuid
 import webbrowser
@@ -23,7 +25,7 @@ import zipfile
 from pathlib import Path
 
 import pymupdf
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, abort, g, jsonify, request, send_file, send_from_directory
 from PIL import Image
 
 import ai
@@ -32,24 +34,83 @@ import fonts
 
 ROOT = Path(__file__).parent
 STATIC = ROOT / "static"
-WORKSPACE = ROOT / "workspace"
-MAX_HISTORY = 30
+WORKSPACE = Path(os.environ.get("PDFEDITOR_WORKSPACE") or ROOT / "workspace")
+
+
+def _flag(name):
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+# Hosted mode (PDFEDITOR_HOSTED=1) is for running on a public server: every
+# browser only sees its own documents, memory use is capped, the AI key comes
+# from each visitor's browser, and server-wide settings can't be changed.
+HOSTED = _flag("PDFEDITOR_HOSTED")
+# In hosted mode, let visitors use the server's ANTHROPIC_API_KEY (you pay for their use).
+SHARE_AI_KEY = _flag("PDFEDITOR_SHARE_AI_KEY")
+MAX_HISTORY = int(os.environ.get("PDFEDITOR_MAX_HISTORY", 10 if HOSTED else 30))
+MAX_DOCS_PER_OWNER = int(os.environ.get("PDFEDITOR_MAX_DOCS", 5 if HOSTED else 1000))
+IDLE_HOURS = float(os.environ.get("PDFEDITOR_IDLE_HOURS", 6 if HOSTED else 0))  # 0 = keep forever
+MAX_UPLOAD_MB = int(os.environ.get("PDFEDITOR_MAX_UPLOAD_MB", 50 if HOSTED else 300))
+OWNER_COOKIE = "pdfeditor_owner"
 
 app = Flask(__name__, static_folder=None)
-app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
-# doc_id -> {"name": str, "versions": [bytes], "pos": int, "fonts_added": bool}
+# doc_id -> {"name", "versions": [bytes], "pos", "fonts_added", "owner", "touched"}
 DOCS = {}
 LOCK = threading.Lock()
+_last_sweep = [0.0]
+
+
+# ---------------------------------------------------------------- visitors
+
+@app.before_request
+def identify_visitor():
+    """Each browser gets a random owner id (a cookie); locally there is one owner."""
+    if not HOSTED:
+        g.owner, g.new_owner = "local", False
+        return
+    owner = request.cookies.get(OWNER_COOKIE, "")
+    g.new_owner = not re.fullmatch(r"[0-9a-f]{32}", owner)
+    g.owner = secrets.token_hex(16) if g.new_owner else owner
+    sweep_idle()
+
+
+@app.after_request
+def remember_visitor(resp):
+    if getattr(g, "new_owner", False):
+        secure = request.is_secure or request.headers.get("X-Forwarded-Proto") == "https"
+        resp.set_cookie(OWNER_COOKIE, g.owner, max_age=30 * 86400, httponly=True,
+                        samesite="Lax", secure=secure)
+    return resp
+
+
+def sweep_idle():
+    """Forget documents nobody has touched for IDLE_HOURS (checked at most every minute)."""
+    now = time.time()
+    if not IDLE_HOURS or now - _last_sweep[0] < 60:
+        return
+    _last_sweep[0] = now
+    cutoff = now - IDLE_HOURS * 3600
+    with LOCK:
+        for doc_id in [k for k, v in DOCS.items() if v.get("touched", now) < cutoff]:
+            DOCS.pop(doc_id, None)
+            forget(doc_id)
 
 
 # ---------------------------------------------------------------- helpers
 
 def get_entry(doc_id):
     entry = DOCS.get(doc_id)
-    if entry is None:
+    if entry is None or entry.get("owner", "local") != g.owner:
         abort(404, "Document not found. Please open it again.")
+    entry["touched"] = time.time()
     return entry
+
+
+def new_rev():
+    """A starting revision number that is unique across restarts (so cached page images aren't reused)."""
+    return int(time.time() * 1000)
 
 
 def current_bytes(entry):
@@ -67,6 +128,7 @@ def save_version(entry, doc):
     if len(entry["versions"]) > MAX_HISTORY:
         entry["versions"] = entry["versions"][-MAX_HISTORY:]
     entry["pos"] = len(entry["versions"]) - 1
+    entry["rev"] = entry.get("rev", new_rev()) + 1
 
 
 def load_pdf(data, password=None):
@@ -147,7 +209,9 @@ def doc_summary(doc_id):
     return {
         "id": doc_id,
         "name": entry["name"],
-        "version": entry["pos"],
+        # Changes on every edit / undo / redo; page image URLs include it.
+        "version": entry.setdefault("rev", new_rev()),
+        "edited": entry["pos"] > 0 or len(entry["versions"]) > 1,
         "pages": page_info(doc),
         "canUndo": entry["pos"] > 0,
         "canRedo": entry["pos"] < len(entry["versions"]) - 1,
@@ -160,7 +224,11 @@ def doc_summary(doc_id):
 def new_doc(name, data):
     doc_id = uuid.uuid4().hex
     with LOCK:
-        DOCS[doc_id] = {"name": name, "versions": [data], "pos": 0}
+        mine = sum(1 for v in DOCS.values() if v.get("owner", "local") == g.owner)
+        if mine >= MAX_DOCS_PER_OWNER:
+            abort(400, f"You can have up to {MAX_DOCS_PER_OWNER} documents open. Close a tab first.")
+        DOCS[doc_id] = {"name": name, "versions": [data], "pos": 0, "owner": g.owner,
+                        "touched": time.time(), "rev": new_rev()}
         persist(doc_id)
     return doc_id
 
@@ -175,7 +243,8 @@ def persist(doc_id):
     try:
         WORKSPACE.mkdir(exist_ok=True)
         (WORKSPACE / f"{doc_id}.pdf").write_bytes(current_bytes(entry))
-        meta = {"name": entry["name"], "fonts_added": bool(entry.get("fonts_added"))}
+        meta = {"name": entry["name"], "fonts_added": bool(entry.get("fonts_added")),
+                "owner": entry.get("owner", "local")}
         (WORKSPACE / f"{doc_id}.json").write_text(json.dumps(meta), encoding="utf-8")
     except OSError:
         pass  # auto-save is best effort; editing keeps working without it
@@ -204,7 +273,9 @@ def restore_workspace():
         except Exception:
             continue
         DOCS[doc_id] = {"name": meta.get("name", "document.pdf"), "versions": [data], "pos": 0,
-                        "fonts_added": meta.get("fonts_added", False)}
+                        "fonts_added": meta.get("fonts_added", False),
+                        "owner": meta.get("owner", "local"), "touched": time.time(),
+                        "rev": new_rev()}
 
 
 # ---------------------------------------------------------------- routes: files
@@ -226,11 +297,33 @@ def api_capabilities():
         tesseract = True
     except Exception:
         tesseract = False
-    return jsonify({"ai": ai.status(), "tesseract": tesseract, **convert.converters()})
+    return jsonify({"ai": ai_status(), "tesseract": tesseract, "hosted": HOSTED,
+                    "maxUploadMb": MAX_UPLOAD_MB, **convert.converters()})
+
+
+def ai_status():
+    if not HOSTED:
+        return ai.status()
+    shared = SHARE_AI_KEY and ai.status()["configured"]
+    return {"configured": shared, "source": "server" if shared else None, "perBrowser": True}
+
+
+def ai_key():
+    """The API key for this request: the visitor's own key in hosted mode."""
+    if not HOSTED:
+        return None  # ai.py uses the saved key or the environment
+    key = request.headers.get("X-Anthropic-Key", "").strip()
+    if key:
+        return key
+    if SHARE_AI_KEY:
+        return None
+    raise ai.AIError("Add your Anthropic API key in AI \u2192 Settings. It is kept in your browser only.")
 
 
 @app.post("/api/settings")
 def api_settings():
+    if HOSTED:
+        abort(403, "Server settings can't be changed on a hosted copy. Your API key stays in your browser.")
     body = request.get_json(silent=True) or {}
     if "anthropicKey" in body:
         ai.save_key(body["anthropicKey"] or "")
@@ -239,12 +332,14 @@ def api_settings():
 
 @app.get("/api/docs")
 def api_docs():
-    """Open documents (tabs), oldest first."""
-    return jsonify([{"id": k, "name": v["name"]} for k, v in DOCS.items()])
+    """This visitor's open documents (tabs), oldest first."""
+    return jsonify([{"id": k, "name": v["name"]} for k, v in DOCS.items()
+                    if v.get("owner", "local") == g.owner])
 
 
 @app.delete("/api/doc/<doc_id>")
 def api_close(doc_id):
+    get_entry(doc_id)
     with LOCK:
         DOCS.pop(doc_id, None)
         forget(doc_id)
@@ -527,6 +622,8 @@ def api_fonts():
 @app.post("/api/fonts")
 def api_add_font():
     """Copy an uploaded .ttf/.otf into the fonts folder."""
+    if HOSTED:
+        abort(403, "Adding fonts is turned off on this hosted copy.")
     f = request.files.get("file")
     if f is None or not f.filename:
         abort(400, "No font file uploaded.")
@@ -691,6 +788,7 @@ def api_find(doc_id):
 
 def ai_route(fn):
     try:
+        g.ai_key = ai_key()
         return jsonify(fn())
     except ai.AIError as e:
         abort(400, str(e))
@@ -701,7 +799,7 @@ def api_ai_summary(doc_id):
     entry = get_entry(doc_id)
     b = request.get_json(silent=True) or {}
     return ai_route(lambda: {"text": ai.summarize(current_bytes(entry), open_current(entry),
-                                                  b.get("length", "medium"))})
+                                                  b.get("length", "medium"), api_key=g.ai_key)})
 
 
 @app.post("/api/doc/<doc_id>/ai/chat")
@@ -709,7 +807,7 @@ def api_ai_chat(doc_id):
     entry = get_entry(doc_id)
     b = request.get_json(silent=True) or {}
     return ai_route(lambda: {"text": ai.chat(current_bytes(entry), open_current(entry),
-                                             b.get("messages", []))})
+                                             b.get("messages", []), api_key=g.ai_key)})
 
 
 @app.post("/api/doc/<doc_id>/ai/autofill")
@@ -729,7 +827,7 @@ def api_ai_autofill(doc_id):
                 f["choices"] = [c if isinstance(c, str) else c[1] for c in w.choice_values]
             fields.append(f)
     return ai_route(lambda: {"values": ai.autofill(current_bytes(entry), doc, fields,
-                                                   b.get("info", ""))})
+                                                   b.get("info", ""), api_key=g.ai_key)})
 
 
 # ---------------------------------------------------------------- routes: history
@@ -740,6 +838,7 @@ def _move(doc_id, step):
         new = entry["pos"] + step
         if 0 <= new < len(entry["versions"]):
             entry["pos"] = new
+            entry["rev"] = entry.get("rev", new_rev()) + 1
             persist(doc_id)
     return jsonify(doc_summary(doc_id))
 
@@ -1436,7 +1535,8 @@ def op_compress(doc, b):
 
 def _ocr_font():
     """A font with Latin and Arabic letters for the invisible OCR text layer."""
-    return fonts.find_by_name("Arial", "Noto Kufi Arabic Regular", "Tajawal Regular", "Segoe UI")
+    return fonts.find_by_name("Arial", "Noto Kufi Arabic Regular", "Tajawal Regular", "Segoe UI",
+                             "DejaVu Sans", "Liberation Sans")
 
 
 def add_text_layer(page, words):
@@ -1536,6 +1636,7 @@ OPS = {
 
 
 @app.errorhandler(400)
+@app.errorhandler(403)
 @app.errorhandler(404)
 @app.errorhandler(413)
 def json_error(e):
@@ -1545,9 +1646,12 @@ def json_error(e):
 restore_workspace()
 
 if __name__ == "__main__":
+    # On a server, run with gunicorn instead (see Dockerfile). Keep one worker
+    # process: open documents live in this process's memory.
     import sys
-    port = 5050
-    if "--no-browser" not in sys.argv:
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", 5050))
+    if "--no-browser" not in sys.argv and not HOSTED:
         threading.Timer(1.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
-    print(f"PDF Editor running at http://127.0.0.1:{port}  (Ctrl+C to stop)")
-    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+    print(f"PDF Editor running at http://{host}:{port}  (Ctrl+C to stop)")
+    app.run(host=host, port=port, debug=False, threaded=True)
