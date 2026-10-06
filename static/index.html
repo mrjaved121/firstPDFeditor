@@ -310,6 +310,17 @@
   </aside>
 </div>
 
+<!-- Page indicator and touch zoom buttons, floating over the pages -->
+<div class="page-pill" id="pagePill" hidden>
+  <button data-p="prev" title="Previous page" aria-label="Previous page">‹</button>
+  <button data-p="go" id="pageLabel" title="Go to page…">1 / 1</button>
+  <button data-p="next" title="Next page" aria-label="Next page">›</button>
+</div>
+<div class="zoom-fab" id="zoomFab" hidden>
+  <button data-z="out" title="Zoom out" aria-label="Zoom out">−</button>
+  <button data-z="fit" title="Fit width" aria-label="Fit width">⤢</button>
+  <button data-z="in" title="Zoom in" aria-label="Zoom in">+</button>
+</div>
 <div id="toolHint" class="tool-hint" hidden></div>
 <div id="formBar" class="form-bar" hidden>
   <button class="btn" id="fillDatesBtn" title="Put today's date into empty date fields">Fill dates</button>

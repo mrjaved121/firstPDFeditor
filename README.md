@@ -52,6 +52,12 @@ fit width, fit page), light and dark mode, drag-and-drop opening, page thumbnail
 the menus in a slide-out drawer, the tools in a bottom bar with pop-up sheets, a slide-out page panel, full-screen
 dialogs, PDFs opened at fit-to-width, finger scrolling and two-finger pinch zoom.
 
+**Touch gestures and navigation**: one finger scrolls; two fingers pinch to zoom and move the page (also while a
+drawing tool is selected, without drawing); double-tap zooms in where you tap and double-tap again fits the
+width (double-click with the Pointer tool on a computer). Floating − / fit / + zoom buttons on touch screens, a
+"‹ 2 / 5 ›" page indicator (tap the number to jump to a page), Home / End for the first / last page, and the
+fit is kept when you rotate the phone or resize the window.
+
 ## Deploy (free) on Render
 
 The repo has a `Dockerfile` and a `render.yaml`, so Render can build it straight from GitHub.
@@ -107,5 +113,5 @@ See `fonts/README.txt` for the full list and the font licences.
 python -m unittest discover tests          # API tests
 python app.py --no-browser                 # then, in another terminal:
 python tests/ui_smoke.py                   # browser test (needs playwright and Chrome or Edge)
-python tests/ui_mobile.py                  # the same on an emulated iPhone
+python tests/ui_mobile.py                  # phone test (iPhone 13); DEVICE="iPad Mini" for a tablet
 ```

@@ -16,8 +16,10 @@ COPY . .
 ENV PDFEDITOR_HOSTED=1 \
     PDFEDITOR_WORKSPACE=/tmp/workspace \
     PYTHONUNBUFFERED=1 \
+    MALLOC_ARENA_MAX=2 \
     PORT=10000
 EXPOSE 10000
 
-# One worker process (documents are kept in its memory), several threads.
-CMD ["sh", "-c", "exec gunicorn --workers 1 --threads 8 --timeout 300 --bind 0.0.0.0:$PORT app:app"]
+# One worker process (documents are kept in its memory), a few threads.
+# MALLOC_ARENA_MAX above keeps memory from fragmenting across threads.
+CMD ["sh", "-c", "exec gunicorn --workers 1 --threads 4 --timeout 300 --bind 0.0.0.0:$PORT app:app"]

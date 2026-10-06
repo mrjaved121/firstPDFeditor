@@ -15,6 +15,7 @@ const state = {
   selected: new Set(),
   lastClicked: null,
   currentPage: 0,
+  fit: null,          // "width" | "page" | null: re-applied when the screen size changes
   pendingImage: null, // data URL waiting to be placed
   imgSel: null,       // selected image for the Images tool
   reselect: null,     // {page, rect}: select the image here after the next refresh
@@ -205,6 +206,8 @@ async function closeTab(id) {
   const tab = state.tabs.find((t) => t.id === id);
   if (!tab) return;
   if (!confirm(`Close “${tab.name}”?\nDownload it first if you want to keep your changes.`)) return;
+  // Stop page images of this document that are still loading (they would fail once it is closed).
+  if (state.doc && state.doc.id === id) $$("#pages img, #thumbs img").forEach((img) => img.removeAttribute("src"));
   try { await api(`/api/doc/${id}`, { method: "DELETE" }); } catch {}
   const i = state.tabs.findIndex((t) => t.id === id);
   state.tabs.splice(i, 1);
@@ -240,6 +243,7 @@ function showEmpty() {
   $("#thumbs").innerHTML = "";
   $("#dropZone").hidden = false;
   $("#docName").textContent = "No document";
+  updatePagePill();
   $("#mobileTitle").textContent = "PDF Editor";
   $("#saveState").textContent = "";
   document.title = "PDF Editor";
@@ -282,6 +286,7 @@ function applySummary(summary, fresh = false) {
   renderTabs();
   if (keepScroll != null) $("#viewer").scrollTop = keepScroll;
   updateButtons();
+  updatePagePill();
   if (summary.hasForms && fresh && !summary.edited) toast("This PDF has form fields. Use “Fill form” to fill them in.");
 }
 
@@ -425,6 +430,7 @@ function updateCurrentPage() {
     state.currentPage = cur;
     $$(".thumb").forEach((t) => t.classList.toggle("current", Number(t.dataset.page) === cur));
   }
+  updatePagePill();
 }
 
 // ------------------------------------------------------------ tools
@@ -777,6 +783,8 @@ function attachOverlay(overlay, n) {
     const tool = state.tool;
     if (tool === "image" && e.target === overlay) { deselectImage(); return; }
     if (!DRAG_TOOLS.includes(tool)) return;
+    // Two fingers on the page mean pinch / pan, not drawing.
+    if (e.pointerType === "touch" && touchPointers.size > 1) { state.cancelDrag?.(); return; }
     e.preventDefault();
     overlay.setPointerCapture(e.pointerId);
     const start = overlayPoint(overlay, e);
@@ -810,14 +818,18 @@ function attachOverlay(overlay, n) {
       if (tool === "ink") path.push(cur);
       draw(cur);
     };
-    const up = (ev) => {
+    const stop = () => {
       overlay.removeEventListener("pointermove", move);
       overlay.removeEventListener("pointerup", up);
       overlay.removeEventListener("pointercancel", up);
-      const end = overlayPoint(overlay, ev);
       preview.remove();
-      finishDrag(tool, n, start, end, path, color, width);
+      state.cancelDrag = null;
     };
+    const up = (ev) => {
+      stop();
+      finishDrag(tool, n, start, overlayPoint(overlay, ev), path, color, width);
+    };
+    state.cancelDrag = stop;
     overlay.addEventListener("pointermove", move);
     overlay.addEventListener("pointerup", up);
     overlay.addEventListener("pointercancel", up);
@@ -1708,25 +1720,31 @@ function setScale(scale, anchorPage = state.currentPage) {
   $(`.page[data-page="${anchorPage}"]`)?.scrollIntoView({ block: "start" });
 }
 
-const setZoom = (factor) => setScale(state.scale * factor);
+const setZoom = (factor) => { setScale(state.scale * factor); state.fit = null; };
 
 const isPhone = () => matchMedia("(max-width: 900px)").matches;
 
-function fitWidth() {
-  if (!state.doc) return;
-  // Phones fit the page in view (a wider landscape page then scrolls sideways);
-  // larger screens fit the widest page.
+// Phones fit the page in view (a wider landscape page then scrolls sideways);
+// larger screens fit the widest page.
+function fitWidthScale() {
   const w = isPhone()
     ? (state.doc.pages[state.currentPage] || state.doc.pages[0]).w
     : Math.max(...state.doc.pages.map((p) => p.w));
-  setScale(($("#viewer").clientWidth - (isPhone() ? 18 : 60)) / w);
+  return ($("#viewer").clientWidth - (isPhone() ? 18 : 60)) / w;
+}
+
+function fitWidth() {
+  if (!state.doc) return;
+  setScale(fitWidthScale());
+  state.fit = "width";
 }
 
 function fitPage() {
   if (!state.doc) return;
   const p = state.doc.pages[state.currentPage] || state.doc.pages[0];
   const v = $("#viewer");
-  setScale(Math.min((v.clientWidth - 60) / p.w, (v.clientHeight - 50) / p.h));
+  setScale(Math.min((v.clientWidth - (isPhone() ? 18 : 60)) / p.w, (v.clientHeight - 50) / p.h));
+  state.fit = "page";
 }
 
 function toggleTheme() {
@@ -1785,41 +1803,164 @@ function setupMenus() {
   for (const id of ["#openInput", "#importInput", "#insertInput"]) $(id).addEventListener("change", () => setPanel(null));
 }
 
-// Two-finger pinch to zoom the pages (phones and touchpads).
+// Fingers currently on the screen (pointer ids), to tell one-finger drawing from pinching.
+const touchPointers = new Set();
+window.addEventListener("pointerdown", (e) => { if (e.pointerType === "touch") touchPointers.add(e.pointerId); }, true);
+for (const type of ["pointerup", "pointercancel"]) {
+  window.addEventListener(type, (e) => touchPointers.delete(e.pointerId), true);
+}
+
+// Zoom to `scale`, keeping the point under (clientX, clientY) where it is.
+function zoomAt(scale, clientX, clientY) {
+  if (!state.doc) return;
+  const viewer = $("#viewer");
+  const r = viewer.getBoundingClientRect();
+  const mx = clientX - r.left, my = clientY - r.top;
+  const x = viewer.scrollLeft + mx, y = viewer.scrollTop + my;
+  const old = state.scale;
+  state.scale = Math.min(Math.max(scale, 0.2), 5);
+  state.fit = null;
+  renderPages();
+  const ratio = state.scale / old;
+  viewer.scrollLeft = x * ratio - mx;
+  viewer.scrollTop = y * ratio - my;
+}
+
+// Double-tap (or double-click with the Pointer tool): zoom in there; again: fit the width.
+function doubleTapZoom(clientX, clientY) {
+  const fit = fitWidthScale();
+  if (state.scale < fit * 1.4) zoomAt(fit * 2.2, clientX, clientY);
+  else { zoomAt(fit, clientX, clientY); state.fit = "width"; }
+}
+
+// Two fingers: pinch to zoom and move to pan (also while a drawing tool is active).
 function setupPinchZoom() {
   const viewer = $("#viewer");
   const wrap = $("#pages");
-  let start = null;
+  let g = null;
+  const mid = (t) => [(t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2];
   const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
   viewer.addEventListener("touchstart", (e) => {
     if (e.touches.length !== 2 || !state.doc) return;
+    e.preventDefault();  // we scroll and zoom ourselves while two fingers are down
+    state.cancelDrag?.();
     const r = viewer.getBoundingClientRect();
-    const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left;
-    const my = (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top;
-    start = { d: dist(e.touches), mx, my, x: viewer.scrollLeft + mx, y: viewer.scrollTop + my, ratio: 1 };
-    wrap.style.transformOrigin = `${start.x}px ${start.y}px`;
-  }, { passive: true });
+    const [cx, cy] = mid(e.touches);
+    g = { d: dist(e.touches), sx: cx, sy: cy, cx, cy, left: r.left, top: r.top, ratio: 1,
+          x: viewer.scrollLeft + cx - r.left, y: viewer.scrollTop + cy - r.top };
+    wrap.style.transformOrigin = `${g.x}px ${g.y}px`;
+  }, { passive: false });
   viewer.addEventListener("touchmove", (e) => {
-    if (!start || e.touches.length !== 2) return;
+    if (!g || e.touches.length !== 2) return;
     e.preventDefault();
-    const scale = Math.min(Math.max(state.scale * dist(e.touches) / start.d, 0.2), 5);
-    start.ratio = scale / state.scale;
-    wrap.style.transform = `scale(${start.ratio})`;
+    [g.cx, g.cy] = mid(e.touches);
+    const scale = Math.min(Math.max(state.scale * dist(e.touches) / g.d, 0.2), 5);
+    g.ratio = scale / state.scale;
+    wrap.style.transform = `translate(${g.cx - g.sx}px, ${g.cy - g.sy}px) scale(${g.ratio})`;
   }, { passive: false });
   const end = () => {
-    if (!start) return;
-    const { ratio, x, y, mx, my } = start;
-    start = null;
+    if (!g) return;
+    const { ratio, x, y, cx, cy, left, top } = g;
+    g = null;
     wrap.style.transform = "";
-    if (Math.abs(ratio - 1) < 0.02) return;
-    state.scale = Math.min(Math.max(state.scale * ratio, 0.2), 5);
-    renderPages();
-    // Keep the point between the fingers where it was.
-    viewer.scrollLeft = x * ratio - mx;
-    viewer.scrollTop = y * ratio - my;
+    if (Math.abs(ratio - 1) >= 0.02) {
+      state.scale = Math.min(Math.max(state.scale * ratio, 0.2), 5);
+      state.fit = null;
+      renderPages();
+    }
+    // Keep the content point that started between the fingers under where they ended.
+    const k = Math.abs(ratio - 1) >= 0.02 ? ratio : 1;
+    viewer.scrollLeft = x * k - (cx - left);
+    viewer.scrollTop = y * k - (cy - top);
   };
   viewer.addEventListener("touchend", (e) => { if (e.touches.length < 2) end(); });
   viewer.addEventListener("touchcancel", end);
+  // Safari's own page zoom would fight with ours.
+  for (const type of ["gesturestart", "gesturechange"]) viewer.addEventListener(type, (e) => e.preventDefault());
+
+  // Double-tap with the Pointer tool.
+  let lastTap = null;
+  viewer.addEventListener("touchend", (e) => {
+    if (state.tool !== "select" || e.touches.length || e.changedTouches.length !== 1 || !state.doc) return;
+    if (!e.target.closest(".page")) return;
+    const t = e.changedTouches[0];
+    const now = Date.now();
+    if (lastTap && now - lastTap.t < 320 && Math.hypot(t.clientX - lastTap.x, t.clientY - lastTap.y) < 30) {
+      e.preventDefault();
+      lastTap = null;
+      doubleTapZoom(t.clientX, t.clientY);
+    } else {
+      lastTap = { t: now, x: t.clientX, y: t.clientY };
+    }
+  });
+  viewer.addEventListener("dblclick", (e) => {
+    if (state.tool === "select" && e.target.closest(".page")) doubleTapZoom(e.clientX, e.clientY);
+  });
+}
+
+// ---- page indicator ("‹ 2 / 5 ›") and the floating zoom buttons
+
+function goToPage(n) {
+  if (!state.doc) return;
+  n = Math.min(Math.max(n, 0), state.doc.pages.length - 1);
+  $(`.page[data-page="${n}"]`)?.scrollIntoView({ block: "start" });
+  state.currentPage = n;
+  updatePagePill();
+}
+
+let pillTimer;
+function updatePagePill() {
+  const pill = $("#pagePill");
+  const has = !!state.doc;
+  pill.hidden = !has;
+  $("#zoomFab").hidden = !has || !(isPhone() || matchMedia("(pointer: coarse)").matches);
+  if (!has) return;
+  $("#pageLabel").textContent = `${state.currentPage + 1} / ${state.doc.pages.length}`;
+  // Fully visible while scrolling, then fades back.
+  pill.classList.add("active");
+  clearTimeout(pillTimer);
+  pillTimer = setTimeout(() => pill.classList.remove("active"), 1500);
+}
+
+async function askGoToPage() {
+  const total = state.doc.pages.length;
+  const r = await ask({
+    title: "Go to page",
+    body: `<label class="field">Page (1–${total})
+      <input type="number" name="page" min="1" max="${total}" value="${state.currentPage + 1}" inputmode="numeric"></label>`,
+    ok: "Go",
+  });
+  if (r && Number(r.page)) goToPage(Number(r.page) - 1);
+}
+
+function setupFloatingControls() {
+  $("#pagePill").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-p]");
+    if (!b || !state.doc) return;
+    if (b.dataset.p === "prev") goToPage(state.currentPage - 1);
+    else if (b.dataset.p === "next") goToPage(state.currentPage + 1);
+    else askGoToPage();
+  });
+  $("#zoomFab").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-z]");
+    if (!b || !state.doc) return;
+    if (b.dataset.z === "fit") { fitWidth(); return; }
+    const v = $("#viewer").getBoundingClientRect();
+    zoomAt(state.scale * (b.dataset.z === "in" ? 1.25 : 0.8), v.left + v.width / 2, v.top + v.height / 2);
+  });
+  // Rotating the phone or resizing the window keeps "fit width" / "fit page".
+  let resizeTimer, lastWidth = $("#viewer").clientWidth;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const w = $("#viewer").clientWidth;
+      if (!state.doc || w === lastWidth) return;
+      lastWidth = w;
+      if (state.fit === "width") fitWidth();
+      else if (state.fit === "page") fitPage();
+      updatePagePill();
+    }, 200);
+  });
 }
 
 function setup() {
@@ -1871,6 +2012,7 @@ function setup() {
 
   setupMenus();
   setupPinchZoom();
+  setupFloatingControls();
   setupSignDialog();
   const swatch = () => ($("#styleSwatch").style.background = $("#colorInput").value);
   $("#colorInput").addEventListener("input", swatch);
@@ -1930,6 +2072,8 @@ function setup() {
     else if (mod && key === "o") { e.preventDefault(); $("#openInput").click(); }
     else if (mod && (key === "=" || key === "+")) { e.preventDefault(); setZoom(1.2); }
     else if (mod && key === "-") { e.preventDefault(); setZoom(1 / 1.2); }
+    else if (key === "home" && state.doc) { e.preventDefault(); goToPage(0); }
+    else if (key === "end" && state.doc) { e.preventDefault(); goToPage(state.doc.pages.length - 1); }
     else if ((key === "delete" || key === "backspace") && state.imgSel) { e.preventDefault(); imageAction("delete"); }
     else if (key === "escape") {
       if (document.body.classList.contains("drawer-open") || document.body.classList.contains("thumbs-open")) setPanel(null);

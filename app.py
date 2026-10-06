@@ -11,6 +11,8 @@ browser close or a server restart (undo history does not).
 """
 
 import base64
+import ctypes
+import gc
 import io
 import json
 import os
@@ -82,7 +84,39 @@ def remember_visitor(resp):
         secure = request.is_secure or request.headers.get("X-Forwarded-Proto") == "https"
         resp.set_cookie(OWNER_COOKIE, g.owner, max_age=30 * 86400, httponly=True,
                         samesite="Lax", secure=secure)
+    if HOSTED:
+        release_memory()
     return resp
+
+
+_last_release = [0.0]
+try:
+    _libc = ctypes.CDLL("libc.so.6")  # Linux (glibc) only
+except OSError:
+    _libc = None
+
+
+def release_memory():
+    """Give memory back to the system (at most every 10 s).
+
+    Free hosting plans have little memory (Render: 512 MB). PDF work leaves
+    MuPDF's cache full and the C heap fragmented, so the process keeps growing
+    unless the cache is emptied and freed memory is returned.
+    """
+    now = time.time()
+    if now - _last_release[0] < 10:
+        return
+    _last_release[0] = now
+    try:
+        pymupdf.TOOLS.store_shrink(100)
+    except Exception:
+        pass
+    gc.collect()
+    if _libc is not None:
+        try:
+            _libc.malloc_trim(0)
+        except Exception:
+            pass
 
 
 def sweep_idle():
