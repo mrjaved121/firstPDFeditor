@@ -44,8 +44,13 @@ CSV, text, HTML, SVG, EPUB and images to PDF; compression; OCR to make scanned p
 saving. Set an Anthropic API key under AI → Settings (saved in `config.json`) or in the `ANTHROPIC_API_KEY`
 environment variable. These features send the open document to the Anthropic API.
 
-**Interface**: tabs for several documents, undo/redo, zoom (buttons, Ctrl+wheel, fit width, fit page), light
-and dark mode, drag-and-drop opening, page thumbnails.
+**Interface**: every feature sits in the File / Pages / Convert / Security / AI / View menus and seven tool
+groups, so the screen stays clean. Tabs for several documents, undo/redo, zoom (buttons, Ctrl+wheel, pinch,
+fit width, fit page), light and dark mode, drag-and-drop opening, page thumbnails.
+
+**Phones and tablets** (screens up to 900 px wide): a slim top bar (menu, document name, undo, redo, download),
+the menus in a slide-out drawer, the tools in a bottom bar with pop-up sheets, a slide-out page panel, full-screen
+dialogs, PDFs opened at fit-to-width, finger scrolling and two-finger pinch zoom.
 
 ## Deploy (free) on Render
 
@@ -102,4 +107,5 @@ See `fonts/README.txt` for the full list and the font licences.
 python -m unittest discover tests          # API tests
 python app.py --no-browser                 # then, in another terminal:
 python tests/ui_smoke.py                   # browser test (needs playwright and Chrome or Edge)
+python tests/ui_mobile.py                  # the same on an emulated iPhone
 ```

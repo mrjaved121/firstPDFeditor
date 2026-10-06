@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
 <title>PDF Editor</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='1' width='12' height='14' rx='2' fill='%232563eb'/%3E%3Cpath d='M5 6h6M5 9h6M5 12h4' stroke='white'/%3E%3C/svg%3E">
 <script>
@@ -15,27 +16,48 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header class="toolbar">
-  <div class="group">
-    <label class="btn primary" title="Open a PDF in a new tab (Ctrl+O)">Open
-      <input type="file" id="openInput" accept="application/pdf,.pdf" multiple hidden>
-    </label>
-    <label class="btn" title="Make a PDF from Word, Excel, PowerPoint, images, text… (opens in a new tab)">Create PDF from…
-      <input type="file" id="importInput" multiple hidden
-        accept=".doc,.docx,.odt,.rtf,.xls,.xlsx,.ods,.csv,.ppt,.pptx,.odp,.png,.jpg,.jpeg,.gif,.bmp,.tif,.tiff,.webp,.svg,.txt,.html,.htm,.xps,.epub">
-    </label>
-    <button class="btn needs-doc" id="downloadBtn" title="Save the edited PDF (Ctrl+S)">Download</button>
-  </div>
+<header class="topbar">
+  <button class="icon-btn mobile-only" id="drawerBtn" title="Menu" aria-label="Menu">
+    <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+  </button>
+  <span class="brand mobile-only" id="mobileTitle">PDF Editor</span>
 
-  <nav class="group menus">
+  <!-- Main menus: inline on desktop, a slide-out drawer on phones -->
+  <nav class="main-menus" id="mainMenus">
+    <div class="drawer-head mobile-only">
+      <strong>Menu</strong>
+      <button class="icon-btn" id="drawerClose" aria-label="Close menu">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
     <div class="menu">
-      <button class="btn needs-doc menu-btn">Pages ▾</button>
+      <button class="btn menu-btn">File ▾</button>
       <div class="menu-list">
+        <label class="menu-item">Open PDF…
+          <input type="file" id="openInput" accept="application/pdf,.pdf" multiple hidden>
+        </label>
+        <label class="menu-item" title="Make a PDF from Word, Excel, PowerPoint, images, text… (opens in a new tab)">Create PDF from Word, Excel, images…
+          <input type="file" id="importInput" multiple hidden
+            accept=".doc,.docx,.odt,.rtf,.xls,.xlsx,.ods,.csv,.ppt,.pptx,.odp,.png,.jpg,.jpeg,.gif,.bmp,.tif,.tiff,.webp,.svg,.txt,.html,.htm,.xps,.epub">
+        </label>
+        <button class="menu-item needs-doc" data-action="download">Download PDF</button>
+        <hr>
+        <button class="menu-item needs-doc" data-action="closeTab">Close this document</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="btn menu-btn needs-doc">Pages ▾</button>
+      <div class="menu-list">
+        <button class="menu-item" data-action="thumbs">Show / hide page thumbnails</button>
+        <hr>
         <label class="menu-item">Insert pages from file…
           <input type="file" id="insertInput" multiple hidden
             accept="application/pdf,.pdf,.docx,.xlsx,.pptx,.csv,.png,.jpg,.jpeg,.gif,.bmp,.tif,.tiff,.webp,.svg,.txt">
         </label>
         <button class="menu-item" data-action="blank">Insert blank page</button>
+        <button class="menu-item" data-action="rotateRight">Rotate selected / current page ⟳</button>
+        <button class="menu-item" data-action="rotateLeft">Rotate selected / current page ⟲</button>
+        <button class="menu-item" data-action="deletePages">Delete selected / current page</button>
         <button class="menu-item" data-action="cropTool">Crop pages (drag on page)</button>
         <button class="menu-item" data-action="uncrop">Remove crop from selected / all</button>
         <hr>
@@ -44,7 +66,7 @@
       </div>
     </div>
     <div class="menu">
-      <button class="btn needs-doc menu-btn">Convert ▾</button>
+      <button class="btn menu-btn needs-doc">Convert ▾</button>
       <div class="menu-list">
         <button class="menu-item" data-action="toDocx">PDF → Word (.docx)</button>
         <button class="menu-item" data-action="toXlsx">PDF → Excel (.xlsx)</button>
@@ -56,7 +78,7 @@
       </div>
     </div>
     <div class="menu">
-      <button class="btn needs-doc menu-btn">Security ▾</button>
+      <button class="btn menu-btn needs-doc">Security ▾</button>
       <div class="menu-list">
         <button class="menu-item" data-action="export">Password &amp; permissions…</button>
         <button class="menu-item" data-action="cleanMeta">Remove hidden metadata</button>
@@ -76,78 +98,149 @@
         <button class="menu-item" data-action="aiSettings">Settings (API key)…</button>
       </div>
     </div>
+    <div class="menu">
+      <button class="btn menu-btn">View ▾</button>
+      <div class="menu-list">
+        <button class="menu-item needs-doc" data-action="zoomIn">Zoom in</button>
+        <button class="menu-item needs-doc" data-action="zoomOut">Zoom out</button>
+        <button class="menu-item needs-doc" data-action="fitWidth">Fit width</button>
+        <button class="menu-item needs-doc" data-action="fitPage">Fit whole page</button>
+        <hr>
+        <button class="menu-item" data-action="theme">Light / dark mode</button>
+      </div>
+    </div>
   </nav>
 
-  <div class="group">
-    <button class="btn needs-doc" id="undoBtn" title="Undo (Ctrl+Z)">↶ Undo</button>
-    <button class="btn needs-doc" id="redoBtn" title="Redo (Ctrl+Y)">↷ Redo</button>
-  </div>
-  <div class="group">
-    <button class="btn needs-doc" id="zoomOut" title="Zoom out (Ctrl+−, or Ctrl+wheel)">−</button>
-    <span id="zoomLabel">100%</span>
-    <button class="btn needs-doc" id="zoomIn" title="Zoom in (Ctrl++)">+</button>
-    <button class="btn needs-doc" id="fitWidth" title="Fit width">↔ Width</button>
-    <button class="btn needs-doc" id="fitPage" title="Fit whole page">⤢ Page</button>
-  </div>
-  <div class="group">
-    <button class="btn" id="themeBtn" title="Switch light / dark mode">◐</button>
-  </div>
-</header>
+  <span class="spacer"></span>
 
-<div class="toolbar tools-row">
-  <div class="group tools" id="tools">
-    <button class="tool active" data-tool="select" title="Scroll / select pages">Pointer</button>
-    <button class="tool" data-tool="edittext" title="Click a line of existing text to change it">Edit text</button>
-    <button class="tool" data-tool="addtext" title="Click to add a text box">Add text</button>
-    <button class="tool" data-tool="image" title="Move, resize, rotate, crop or delete images in the PDF">Images</button>
-    <span class="sep"></span>
-    <button class="tool" data-tool="highlight" title="Drag over text to highlight">Highlight</button>
-    <button class="tool" data-tool="underline" title="Drag over text to underline">U̲</button>
-    <button class="tool" data-tool="strikeout" title="Drag over text to strike it out">S̶</button>
-    <button class="tool" data-tool="note" title="Click to add a sticky note / comment">Note</button>
-    <span class="sep"></span>
-    <button class="tool" data-tool="ink" title="Freehand drawing">Draw</button>
-    <button class="tool" data-tool="rect" title="Rectangle">▭</button>
-    <button class="tool" data-tool="ellipse" title="Ellipse">◯</button>
-    <button class="tool" data-tool="line" title="Line">╱</button>
-    <button class="tool" data-tool="arrow" title="Arrow">↗</button>
-    <span class="sep"></span>
-    <button class="tool" data-tool="whiteout" title="Permanently erase an area (white-out)">White-out</button>
-    <button class="tool" data-tool="redact" title="Permanently remove an area and black it out">Redact</button>
-    <button class="tool" data-tool="croppage" title="Drag the area of the page to keep">Crop page</button>
-    <span class="sep"></span>
-    <button class="tool" data-tool="sign" title="Draw, type or upload a signature, or place an image (PNG, JPG, SVG)">Sign / Image</button>
-    <button class="tool" data-tool="date" title="Click to stamp today's date">Date</button>
-    <button class="tool" data-tool="form" title="Fill in form fields">Fill form</button>
-    <button class="tool" data-tool="field" title="Drag to create a fillable form field">+ Field</button>
-    <button class="tool" data-tool="eraser" title="Click an annotation to delete it">Remove mark</button>
+  <div class="group">
+    <button class="icon-btn needs-doc" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">
+      <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg>
+    </button>
+    <button class="icon-btn needs-doc" id="redoBtn" title="Redo (Ctrl+Y)" aria-label="Redo">
+      <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h3"/></svg>
+    </button>
   </div>
-  <div class="group props">
-    <label title="Colour">Colour <input type="color" id="colorInput" value="#d0021b"></label>
-    <label title="Font for Add text / Edit text. Automatic = match the PDF's own font when editing, standard font when adding.">Font
-      <select id="fontSelect"><option value="auto">Automatic</option></select>
-    </label>
-    <label class="btn small" title="Add a font file (.ttf / .otf), e.g. DIN Next LT Arabic">+ Font
-      <input type="file" id="fontInput" accept=".ttf,.otf,.ttc" hidden>
-    </label>
-    <label title="Font size for text">Size <input type="number" id="sizeInput" value="14" min="4" max="96"></label>
-    <button class="toggle" id="boldBtn" title="Bold (Add text)"><b>B</b></button>
-    <button class="toggle" id="italicBtn" title="Italic (Add text)"><i>I</i></button>
-    <select id="alignSelect" title="Alignment of multi-line text (Add text)">
-      <option value="left">⯇ Left</option>
-      <option value="center">≡ Center</option>
-      <option value="right">⯈ Right</option>
-    </select>
-    <label title="Line width">Width <input type="number" id="widthInput" value="2" min="0.5" max="20" step="0.5"></label>
-    <label title="Date format for the Date tool">Date
-      <select id="dateFormat">
-        <option value="MM/DD/YYYY">MM/DD/YYYY</option>
-        <option value="DD/MM/YYYY">DD/MM/YYYY</option>
-        <option value="YYYY-MM-DD">YYYY-MM-DD</option>
-        <option value="D MMMM YYYY">D Month YYYY</option>
-        <option value="MMMM D, YYYY">Month D, YYYY</option>
-      </select>
-    </label>
+  <div class="group desktop-only zoom-group">
+    <button class="icon-btn needs-doc" id="zoomOut" title="Zoom out (Ctrl+−, or Ctrl+wheel)" aria-label="Zoom out">
+      <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+    </button>
+    <span id="zoomLabel">100%</span>
+    <button class="icon-btn needs-doc" id="zoomIn" title="Zoom in (Ctrl++)" aria-label="Zoom in">
+      <svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>
+    </button>
+    <button class="icon-btn needs-doc" id="fitWidth" title="Fit width" aria-label="Fit width">
+      <svg viewBox="0 0 24 24"><path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/></svg>
+    </button>
+    <button class="icon-btn needs-doc" id="fitPage" title="Fit whole page" aria-label="Fit page">
+      <svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="1"/></svg>
+    </button>
+  </div>
+  <button class="icon-btn desktop-only" id="themeBtn" title="Light / dark mode" aria-label="Light or dark mode">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 000 16z" fill="currentColor"/></svg>
+  </button>
+  <button class="btn primary needs-doc" id="downloadBtn" title="Save the edited PDF (Ctrl+S)">
+    <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span class="label">Download</span>
+  </button>
+</header>
+<div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+
+<!-- Tools: one row on desktop, a bottom bar with pop-up sheets on phones -->
+<div class="tools-row" id="tools">
+  <button class="tool active" data-tool="select" title="Scroll / select pages">
+    <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-3 6z"/></svg><span>Pointer</span>
+  </button>
+  <button class="tool" data-tool="edittext" title="Click a line of existing text to change it">
+    <svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg><span>Edit text</span>
+  </button>
+  <button class="tool" data-tool="addtext" title="Click to add a text box">
+    <svg viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg><span>Add text</span>
+  </button>
+  <div class="menu tool-menu">
+    <button class="tool-group menu-btn needs-doc" data-group="markup" title="Highlight, underline, strikethrough, notes">
+      <svg viewBox="0 0 24 24"><path d="M4 20h16"/><path d="M7 16l9-9 3 3-9 9H7z"/></svg><span>Markup</span>
+    </button>
+    <div class="menu-list sheet">
+      <div class="sheet-title">Markup</div>
+      <button class="tool" data-tool="highlight"><span class="ico">🖍</span><span>Highlight</span></button>
+      <button class="tool" data-tool="underline"><span class="ico">U̲</span><span>Underline</span></button>
+      <button class="tool" data-tool="strikeout"><span class="ico">S̶</span><span>Strikethrough</span></button>
+      <button class="tool" data-tool="note"><span class="ico">🗨</span><span>Sticky note</span></button>
+    </div>
+  </div>
+  <div class="menu tool-menu">
+    <button class="tool-group menu-btn needs-doc" data-group="draw" title="Freehand, shapes, lines and arrows">
+      <svg viewBox="0 0 24 24"><path d="M3 17c3-5 6 3 9-2s5-6 9-3"/></svg><span>Draw</span>
+    </button>
+    <div class="menu-list sheet">
+      <div class="sheet-title">Draw</div>
+      <button class="tool" data-tool="ink"><span class="ico">✎</span><span>Freehand</span></button>
+      <button class="tool" data-tool="rect"><span class="ico">▭</span><span>Rectangle</span></button>
+      <button class="tool" data-tool="ellipse"><span class="ico">◯</span><span>Ellipse</span></button>
+      <button class="tool" data-tool="line"><span class="ico">╱</span><span>Line</span></button>
+      <button class="tool" data-tool="arrow"><span class="ico">↗</span><span>Arrow</span></button>
+    </div>
+  </div>
+  <div class="menu tool-menu">
+    <button class="tool-group menu-btn needs-doc" data-group="sign" title="Signatures, dates and form fields">
+      <svg viewBox="0 0 24 24"><path d="M3 18c4 0 5-12 8-12s-1 12 2 12 3-4 5-4 2 2 3 2"/></svg><span>Sign &amp; fill</span>
+    </button>
+    <div class="menu-list sheet">
+      <div class="sheet-title">Sign &amp; fill</div>
+      <button class="tool" data-tool="sign" title="Draw, type or upload a signature, or place an image (PNG, JPG, SVG)"><span class="ico">✍</span><span>Signature / image</span></button>
+      <button class="tool" data-tool="date" title="Click to stamp today's date"><span class="ico">📅</span><span>Date stamp</span></button>
+      <button class="tool" data-tool="form" title="Fill in form fields"><span class="ico">☑</span><span>Fill form</span></button>
+      <button class="tool" data-tool="field" title="Drag to create a fillable form field"><span class="ico">⊞</span><span>Add form field</span></button>
+    </div>
+  </div>
+  <div class="menu tool-menu">
+    <button class="tool-group menu-btn needs-doc" data-group="more" title="Images, white-out, redaction, cropping">
+      <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg><span>More</span>
+    </button>
+    <div class="menu-list sheet">
+      <div class="sheet-title">More tools</div>
+      <button class="tool" data-tool="image" title="Move, resize, rotate, crop or delete images in the PDF"><span class="ico">🖼</span><span>Edit images</span></button>
+      <button class="tool" data-tool="whiteout" title="Permanently erase an area (white-out)"><span class="ico">⬜</span><span>White-out</span></button>
+      <button class="tool" data-tool="redact" title="Permanently remove an area and black it out"><span class="ico">⬛</span><span>Redact</span></button>
+      <button class="tool" data-tool="croppage" title="Drag the area of the page to keep"><span class="ico">⛶</span><span>Crop page</span></button>
+      <button class="tool" data-tool="eraser" title="Click an annotation to delete it"><span class="ico">⌫</span><span>Remove mark</span></button>
+    </div>
+  </div>
+  <div class="menu tool-menu style-menu">
+    <button class="tool-group menu-btn" title="Colour, font, size and line width">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg><span>Style</span>
+      <i class="swatch" id="styleSwatch"></i>
+    </button>
+    <div class="menu-list sheet keep-open props">
+      <div class="sheet-title">Style</div>
+      <label>Colour <input type="color" id="colorInput" value="#d0021b"></label>
+      <label title="Font for Add text / Edit text. Automatic = match the PDF's own font when editing, standard font when adding.">Font
+        <select id="fontSelect"><option value="auto">Automatic</option></select>
+      </label>
+      <label class="btn small" title="Add a font file (.ttf / .otf), e.g. DIN Next LT Arabic">+ Add font file
+        <input type="file" id="fontInput" accept=".ttf,.otf,.ttc" hidden>
+      </label>
+      <div class="row">
+        <label title="Font size for text">Size <input type="number" id="sizeInput" value="14" min="4" max="96"></label>
+        <button class="toggle" id="boldBtn" title="Bold (Add text)"><b>B</b></button>
+        <button class="toggle" id="italicBtn" title="Italic (Add text)"><i>I</i></button>
+        <select id="alignSelect" title="Alignment of multi-line text (Add text)">
+          <option value="left">Left</option>
+          <option value="center">Center</option>
+          <option value="right">Right</option>
+        </select>
+      </div>
+      <label title="Line width">Line width <input type="number" id="widthInput" value="2" min="0.5" max="20" step="0.5"></label>
+      <label title="Date format for the Date tool">Date format
+        <select id="dateFormat">
+          <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+          <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+          <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+          <option value="D MMMM YYYY">D Month YYYY</option>
+          <option value="MMMM D, YYYY">Month D, YYYY</option>
+        </select>
+      </label>
+    </div>
   </div>
 </div>
 
@@ -156,6 +249,9 @@
 <div class="layout">
   <aside class="sidebar">
     <div class="side-head">
+      <button class="icon-btn mobile-only side-close" id="thumbsClose" aria-label="Close page panel">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
       <span id="docName">No document</span>
       <span id="selInfo"></span>
       <span id="saveState" class="save-state"></span>
@@ -168,8 +264,11 @@
       <button class="btn small needs-sel danger" id="delPagesBtn">Delete</button>
       <button class="btn small needs-sel" id="extractBtn" title="Download selected pages as a new PDF">Extract</button>
       <button class="btn small needs-doc" id="blankBtn" title="Insert a blank page after the selected (or last) page">+ Blank</button>
+      <button class="btn small needs-sel" id="moveUpBtn" title="Move the selected pages up">▲ Up</button>
+      <button class="btn small needs-sel" id="moveDownBtn" title="Move the selected pages down">▼ Down</button>
     </div>
-    <p class="hint">Drag thumbnails to reorder. Click to jump, Ctrl/Shift-click to select.</p>
+    <p class="hint desktop-hint">Drag thumbnails to reorder. Click to jump, Ctrl/Shift-click to select.</p>
+    <p class="hint phone-hint">Tap a page to select it (tap again to add more), then use the buttons above.</p>
     <div id="thumbs"></div>
   </aside>
 

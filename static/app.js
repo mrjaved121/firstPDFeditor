@@ -183,6 +183,9 @@ function showDoc(summary) {
   state.selected.clear();
   state.imgSel = null;
   applySummary(summary, true);
+  // New documents open at fit-to-width on phones, or whenever the page would not fit.
+  const tooWide = Math.max(...summary.pages.map((p) => p.w)) * state.scale > $("#viewer").clientWidth - 40;
+  if (!(summary.id in state.scroll) && (isPhone() || tooWide)) fitWidth();
   $("#viewer").scrollTop = state.scroll[summary.id] || 0;
   try { localStorage.setItem("pdfeditor.activeTab", summary.id); } catch {}
   renderAiLog();
@@ -237,6 +240,7 @@ function showEmpty() {
   $("#thumbs").innerHTML = "";
   $("#dropZone").hidden = false;
   $("#docName").textContent = "No document";
+  $("#mobileTitle").textContent = "PDF Editor";
   $("#saveState").textContent = "";
   document.title = "PDF Editor";
   updateSelInfo();
@@ -267,6 +271,7 @@ function applySummary(summary, fresh = false) {
   for (const n of [...state.selected]) if (n >= summary.pages.length) state.selected.delete(n);
   $("#dropZone").hidden = true;
   $("#docName").textContent = summary.name;
+  $("#mobileTitle").textContent = summary.name;
   $("#saveState").textContent = !summary.edited ? ""
     : state.caps.hosted ? "✓ Changes saved on the server while you work (download to keep them)"
     : "✓ Changes auto-saved on this computer";
@@ -341,7 +346,11 @@ function renderThumbs() {
 }
 
 function onThumbClick(e, n) {
-  if (e.shiftKey && state.lastClicked != null) {
+  if (isPhone()) {
+    // No Ctrl/Shift on a phone: taps add or remove pages from the selection.
+    state.selected.has(n) ? state.selected.delete(n) : state.selected.add(n);
+    if (state.selected.has(n)) $(`.page[data-page="${n}"]`)?.scrollIntoView({ block: "start" });
+  } else if (e.shiftKey && state.lastClicked != null) {
     const [a, b] = [Math.min(n, state.lastClicked), Math.max(n, state.lastClicked)];
     for (let i = a; i <= b; i++) state.selected.add(i);
   } else if (e.ctrlKey || e.metaKey) {
@@ -373,6 +382,24 @@ function updateButtons() {
   $("#undoBtn").disabled = !has || !state.doc.canUndo;
   $("#redoBtn").disabled = !has || !state.doc.canRedo;
   $("#insertInput").disabled = !has;
+}
+
+// Move the selected pages one place up (-1) or down (+1), keeping them selected.
+function moveSelected(step) {
+  const sel = selectedPages();
+  const order = state.doc.pages.map((_, i) => i);
+  if (!sel.length || (step < 0 && sel[0] === 0) || (step > 0 && sel[sel.length - 1] === order.length - 1)) return;
+  for (const n of step < 0 ? sel : [...sel].reverse()) {
+    const i = order.indexOf(n);
+    [order[i], order[i + step]] = [order[i + step], order[i]];
+  }
+  const moved = new Set(sel.map((n) => order.indexOf(n)));
+  op({ op: "reorder", order }).then((ok) => {
+    if (!ok) return;
+    state.selected = moved;
+    renderThumbs();
+    updateButtons();
+  });
 }
 
 function movePage(from, to) {
@@ -407,11 +434,30 @@ function setTool(tool) {
   state.tool = tool;
   state.imgSel = null;
   document.body.dataset.tool = tool;
-  $$(".tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === tool));
-  const hint = TOOL_HINTS[tool];
-  $("#toolHint").hidden = !hint;
-  $("#toolHint").textContent = hint || "";
+  markTool(tool);
+  showHint(TOOL_HINTS[tool]);
   refreshToolLayer();
+}
+
+// The tool tip stays on large screens; on phones it fades after a few seconds
+// so it doesn't cover the page.
+let hintTimer;
+function showHint(text) {
+  const el = $("#toolHint");
+  clearTimeout(hintTimer);
+  el.hidden = !text;
+  el.textContent = text || "";
+  el.classList.remove("faded");
+  if (text && isPhone()) hintTimer = setTimeout(() => el.classList.add("faded"), 4000);
+}
+
+// Highlight the active tool, and the group button whose menu holds it.
+function markTool(tool) {
+  $$(".tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === tool));
+  $$(".tool-menu").forEach((m) => {
+    const btn = $(".tool-group", m);
+    if (btn) btn.classList.toggle("active", !!$(`.tool[data-tool="${tool}"]`, m));
+  });
 }
 
 // Draw tool-specific helpers (text boxes, annotation boxes, images, form fields) on top of pages.
@@ -994,7 +1040,29 @@ const chosenPages = (r) => (r.pages === "selected" ? selectedPages() : null);
 
 // ------------------------------------------------------------ menu actions
 
+// The pages a page command applies to: the selected thumbnails, else the page in view.
+const targetPages = () => (state.selected.size ? selectedPages() : [state.currentPage]);
+
 const actions = {
+  download() { $("#downloadBtn").click(); },
+  closeTab() { closeTab(state.doc.id); },
+  thumbs() {
+    if (isPhone()) setPanel(document.body.classList.contains("thumbs-open") ? null : "thumbs");
+    else document.body.classList.toggle("thumbs-hidden");
+  },
+  rotateRight() { op({ op: "rotate", pages: targetPages(), angle: 90 }); },
+  rotateLeft() { op({ op: "rotate", pages: targetPages(), angle: -90 }); },
+  async deletePages() {
+    const pages = targetPages();
+    if (pages.length >= state.doc.pages.length) { toast("A PDF must keep at least one page.", true); return; }
+    if (!confirm(`Delete page${pages.length > 1 ? "s" : ""} ${pages.map((n) => n + 1).join(", ")}?`)) return;
+    if (await op({ op: "delete", pages })) { state.selected.clear(); renderThumbs(); updateButtons(); }
+  },
+  zoomIn() { setZoom(1.2); },
+  zoomOut() { setZoom(1 / 1.2); },
+  fitWidth() { fitWidth(); },
+  fitPage() { fitPage(); },
+  theme() { toggleTheme(); },
   blank() {
     const sel = selectedPages();
     op({ op: "insert_blank", after: sel.length ? sel[sel.length - 1] : state.doc.pages.length - 1 });
@@ -1574,9 +1642,8 @@ function useSignature(dataUrl) {
   state.pendingImage = dataUrl;
   state.tool = "place";
   document.body.dataset.tool = "sign";
-  $$(".tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === "sign"));
-  $("#toolHint").hidden = false;
-  $("#toolHint").textContent = TOOL_HINTS.sign;
+  markTool("sign");
+  showHint(TOOL_HINTS.sign);
   refreshToolLayer();
 }
 
@@ -1643,10 +1710,16 @@ function setScale(scale, anchorPage = state.currentPage) {
 
 const setZoom = (factor) => setScale(state.scale * factor);
 
+const isPhone = () => matchMedia("(max-width: 900px)").matches;
+
 function fitWidth() {
   if (!state.doc) return;
-  const widest = Math.max(...state.doc.pages.map((p) => p.w));
-  setScale(($("#viewer").clientWidth - 60) / widest);
+  // Phones fit the page in view (a wider landscape page then scrolls sideways);
+  // larger screens fit the widest page.
+  const w = isPhone()
+    ? (state.doc.pages[state.currentPage] || state.doc.pages[0]).w
+    : Math.max(...state.doc.pages.map((p) => p.w));
+  setScale(($("#viewer").clientWidth - (isPhone() ? 18 : 60)) / w);
 }
 
 function fitPage() {
@@ -1671,24 +1744,82 @@ async function history(kind) {
   catch (e) { toast(e.message, true); }
 }
 
+const closeMenus = () => $$(".menu.open").forEach((m) => m.classList.remove("open"));
+
+// Side panels on phones: "drawer" (main menus) or "thumbs" (pages), or null.
+function setPanel(name) {
+  document.body.classList.toggle("drawer-open", name === "drawer");
+  document.body.classList.toggle("thumbs-open", name === "thumbs");
+  $("#drawerBackdrop").hidden = !name;
+  if (name !== "drawer") closeMenus();
+}
+
+const NO_DOC_ACTIONS = ["aiSettings", "theme", "thumbs"];
+
 function setupMenus() {
   $$(".menu-btn").forEach((btn) => btn.addEventListener("click", (e) => {
     e.stopPropagation();
     const menu = btn.parentElement;
     const open = !menu.classList.contains("open");
-    $$(".menu.open").forEach((m) => m.classList.remove("open"));
+    closeMenus();
     menu.classList.toggle("open", open);
   }));
   document.addEventListener("click", (e) => {
-    if (!e.target.closest(".menu-list label")) $$(".menu.open").forEach((m) => m.classList.remove("open"));
+    // Clicks inside the Style panel or on a file picker keep the menu open.
+    if (!e.target.closest(".menu-list label, .keep-open")) closeMenus();
   });
   $$(".menu-item[data-action]").forEach((item) => item.addEventListener("click", () => {
-    $$(".menu.open").forEach((m) => m.classList.remove("open"));
-    const fn = actions[item.dataset.action];
+    closeMenus();
+    const action = item.dataset.action;
+    const fn = actions[action];
     if (!fn) return;
-    if (!state.doc && item.dataset.action !== "aiSettings") { toast("Open a PDF first.", true); return; }
+    if (action !== "thumbs") setPanel(null);
+    if (!state.doc && !NO_DOC_ACTIONS.includes(action)) { toast("Open a PDF first.", true); return; }
     fn();
   }));
+  $("#drawerBtn").addEventListener("click", () => setPanel(document.body.classList.contains("drawer-open") ? null : "drawer"));
+  $("#drawerClose").addEventListener("click", () => setPanel(null));
+  $("#thumbsClose").addEventListener("click", () => setPanel(null));
+  $("#drawerBackdrop").addEventListener("click", () => setPanel(null));
+  // A chosen file closes the drawer too.
+  for (const id of ["#openInput", "#importInput", "#insertInput"]) $(id).addEventListener("change", () => setPanel(null));
+}
+
+// Two-finger pinch to zoom the pages (phones and touchpads).
+function setupPinchZoom() {
+  const viewer = $("#viewer");
+  const wrap = $("#pages");
+  let start = null;
+  const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  viewer.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 2 || !state.doc) return;
+    const r = viewer.getBoundingClientRect();
+    const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left;
+    const my = (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top;
+    start = { d: dist(e.touches), mx, my, x: viewer.scrollLeft + mx, y: viewer.scrollTop + my, ratio: 1 };
+    wrap.style.transformOrigin = `${start.x}px ${start.y}px`;
+  }, { passive: true });
+  viewer.addEventListener("touchmove", (e) => {
+    if (!start || e.touches.length !== 2) return;
+    e.preventDefault();
+    const scale = Math.min(Math.max(state.scale * dist(e.touches) / start.d, 0.2), 5);
+    start.ratio = scale / state.scale;
+    wrap.style.transform = `scale(${start.ratio})`;
+  }, { passive: false });
+  const end = () => {
+    if (!start) return;
+    const { ratio, x, y, mx, my } = start;
+    start = null;
+    wrap.style.transform = "";
+    if (Math.abs(ratio - 1) < 0.02) return;
+    state.scale = Math.min(Math.max(state.scale * ratio, 0.2), 5);
+    renderPages();
+    // Keep the point between the fingers where it was.
+    viewer.scrollLeft = x * ratio - mx;
+    viewer.scrollTop = y * ratio - my;
+  };
+  viewer.addEventListener("touchend", (e) => { if (e.touches.length < 2) end(); });
+  viewer.addEventListener("touchcancel", end);
 }
 
 function setup() {
@@ -1735,9 +1866,15 @@ function setup() {
   });
   $("#extractBtn").addEventListener("click", () => actions.extract());
   $("#blankBtn").addEventListener("click", () => actions.blank());
+  $("#moveUpBtn").addEventListener("click", () => moveSelected(-1));
+  $("#moveDownBtn").addEventListener("click", () => moveSelected(1));
 
   setupMenus();
+  setupPinchZoom();
   setupSignDialog();
+  const swatch = () => ($("#styleSwatch").style.background = $("#colorInput").value);
+  $("#colorInput").addEventListener("input", swatch);
+  swatch();
   loadFonts();
   $("#fontInput").addEventListener("change", (e) => { uploadFont(e.target.files[0]); e.target.value = ""; });
 
@@ -1795,7 +1932,9 @@ function setup() {
     else if (mod && key === "-") { e.preventDefault(); setZoom(1 / 1.2); }
     else if ((key === "delete" || key === "backspace") && state.imgSel) { e.preventDefault(); imageAction("delete"); }
     else if (key === "escape") {
-      if (state.imgSel?.cropping) { state.imgSel.cropping = false; state.imgSel.box.classList.remove("cropping"); }
+      if (document.body.classList.contains("drawer-open") || document.body.classList.contains("thumbs-open")) setPanel(null);
+      else if ($(".menu.open")) closeMenus();
+      else if (state.imgSel?.cropping) { state.imgSel.cropping = false; state.imgSel.box.classList.remove("cropping"); }
       else if (state.imgSel) deselectImage();
       else setTool("select");
     }

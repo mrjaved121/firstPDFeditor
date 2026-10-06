@@ -86,7 +86,16 @@ def main():
             page.mouse.up()
 
         def tool(name):
-            page.click(f'.tool[data-tool="{name}"]')
+            btn = page.locator(f'.tool[data-tool="{name}"]')
+            if not btn.is_visible():  # tools in a group menu: open the menu first
+                page.locator(".tool-menu", has=btn).locator(".tool-group").click()
+            btn.click()
+
+        def style(fn):
+            """Run fn with the Style panel open."""
+            page.click(".style-menu .tool-group")
+            fn()
+            page.keyboard.press("Escape")
 
         def menu(label, action):
             page.click(f'.menu-btn:has-text("{label}")')
@@ -114,14 +123,13 @@ def main():
 
         go("add text (bold, centered)")
         tool("addtext")
-        page.click("#boldBtn")
-        page.select_option("#alignSelect", "center")
+        style(lambda: (page.click("#boldBtn"), page.select_option("#alignSelect", "center")))
         v = version()
         click_at(0, 100, 420)
         page.keyboard.type("Bold added text")
         page.keyboard.press("Enter")
         wait_change(v)
-        page.click("#boldBtn")
+        style(lambda: page.click("#boldBtn"))
 
         go("edit text")
         tool("edittext")
